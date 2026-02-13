@@ -1,0 +1,16 @@
+[
+  {
+    "name": "Основной",
+    "server": "proxy.nocto.online",
+    "port": 8443,
+    "secret": "5f5e4c031763e2bd0be7c3134f54c3e3",
+    "enabled": true
+  },
+  {
+    "name": "Резерв#1",
+    "server": "fi01.nocto.online",
+    "port": 8443,
+    "secret": "82cd0f5b19372f86e2c3feb9c8caf140",
+    "enabled": true
+  }
+]
