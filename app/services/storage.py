@@ -163,6 +163,97 @@ class Storage:
             )
         return result
 
+    async def get_users_page(self, page: int, page_size: int = 10) -> list[dict[str, str | int | None]]:
+        safe_page = max(1, int(page))
+        safe_page_size = max(1, int(page_size))
+        offset = (safe_page - 1) * safe_page_size
+
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT tg_id, username, full_name, first_seen, last_seen, invited_by
+                FROM users
+                ORDER BY last_seen DESC
+                LIMIT ? OFFSET ?
+                """,
+                (safe_page_size, offset),
+            )
+            rows = await cursor.fetchall()
+
+        result: list[dict[str, str | int | None]] = []
+        for row in rows:
+            result.append(
+                {
+                    "tg_id": int(row[0]),
+                    "username": row[1],
+                    "full_name": row[2],
+                    "first_seen": row[3],
+                    "last_seen": row[4],
+                    "invited_by": int(row[5]) if row[5] is not None else None,
+                }
+            )
+        return result
+
+    async def get_user_by_tg_id(self, tg_id: int) -> dict[str, str | int | None] | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT tg_id, username, full_name, first_seen, last_seen, invited_by
+                FROM users
+                WHERE tg_id = ?
+                LIMIT 1
+                """,
+                (int(tg_id),),
+            )
+            row = await cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return {
+            "tg_id": int(row[0]),
+            "username": row[1],
+            "full_name": row[2],
+            "first_seen": row[3],
+            "last_seen": row[4],
+            "invited_by": int(row[5]) if row[5] is not None else None,
+        }
+
+    async def search_users(self, query: str, limit: int = 10) -> list[dict[str, str | int | None]]:
+        q = (query or "").strip()
+        if not q:
+            return []
+
+        like_value = f"%{q.lower()}%"
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT tg_id, username, full_name, first_seen, last_seen, invited_by
+                FROM users
+                WHERE CAST(tg_id AS TEXT) LIKE ?
+                   OR LOWER(COALESCE(username, '')) LIKE ?
+                   OR LOWER(COALESCE(full_name, '')) LIKE ?
+                ORDER BY last_seen DESC
+                LIMIT ?
+                """,
+                (like_value, like_value, like_value, int(limit)),
+            )
+            rows = await cursor.fetchall()
+
+        result: list[dict[str, str | int | None]] = []
+        for row in rows:
+            result.append(
+                {
+                    "tg_id": int(row[0]),
+                    "username": row[1],
+                    "full_name": row[2],
+                    "first_seen": row[3],
+                    "last_seen": row[4],
+                    "invited_by": int(row[5]) if row[5] is not None else None,
+                }
+            )
+        return result
+
     async def get_all_user_ids(self) -> list[int]:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute("SELECT tg_id FROM users")

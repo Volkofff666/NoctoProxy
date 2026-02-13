@@ -11,6 +11,7 @@ from app.services.proxy_links import ProxyItem, ProxyStore
 from app.services.storage import Storage
 
 router = Router()
+USERS_PAGE_SIZE = 10
 
 
 class AddProxyForm(StatesGroup):
@@ -21,6 +22,14 @@ class AddProxyForm(StatesGroup):
 
 
 class BroadcastForm(StatesGroup):
+    text = State()
+
+
+class UserSearchForm(StatesGroup):
+    query = State()
+
+
+class UserWriteForm(StatesGroup):
     text = State()
 
 
@@ -61,6 +70,60 @@ def build_wizard_keyboard(back_to: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="✖️ Отмена", callback_data="admin:menu")],
         ]
     )
+
+
+def build_users_keyboard(
+    users: list[dict[str, str | int | None]],
+    page: int,
+    total_pages: int,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+
+    for user in users:
+        tg_id = int(user["tg_id"])
+        username = user["username"]
+        if username:
+            label = f"👤 @{username} ({tg_id})"
+        else:
+            label = f"👤 {tg_id}"
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"admin:user:{tg_id}:{page}")])
+
+    nav_row: list[InlineKeyboardButton] = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin:users:{page - 1}"))
+    nav_row.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="admin:users:noop"))
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"admin:users:{page + 1}"))
+    rows.append(nav_row)
+    rows.append([InlineKeyboardButton(text="🔎 Поиск", callback_data="admin:users_search")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_user_profile_keyboard(back_callback: str, tg_id: int, page: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✉️ Написать", callback_data=f"admin:user_write:{tg_id}:{page}")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)],
+            [InlineKeyboardButton(text="🏠 В меню", callback_data="admin:menu")],
+        ]
+    )
+
+
+def build_user_search_results_keyboard(users: list[dict[str, str | int | None]]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for user in users:
+        tg_id = int(user["tg_id"])
+        username = user["username"]
+        if username:
+            label = f"👤 @{username} ({tg_id})"
+        else:
+            label = f"👤 {tg_id}"
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"admin:usersearch:{tg_id}")])
+    rows.append([InlineKeyboardButton(text="🔎 Новый поиск", callback_data="admin:users_search")])
+    rows.append([InlineKeyboardButton(text="👥 К списку пользователей", callback_data="admin:users:1")])
+    rows.append([InlineKeyboardButton(text="🏠 В меню", callback_data="admin:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _add_step_text(step: str, data: dict) -> str:
@@ -312,37 +375,143 @@ async def cb_admin_actions(
 
     if action[1] == "users":
         await state.clear()
+        if len(action) >= 3 and action[2] == "noop":
+            await callback.answer()
+            return
+
+        page = 1
+        if len(action) >= 3 and action[2].isdigit():
+            page = max(1, int(action[2]))
+
         total_users = await storage.count_users()
-        top_referrers = await storage.get_top_referrers(10)
-        recent_users = await storage.get_recent_users(12)
+        total_pages = max(1, (total_users + USERS_PAGE_SIZE - 1) // USERS_PAGE_SIZE)
+        if page > total_pages:
+            page = total_pages
 
-        lines = [f"Пользователи: {total_users}", ""]
-        lines.append("Топ пригласивших:")
-        if not top_referrers:
-            lines.append("- пока нет приглашений")
-        else:
-            for ref_id, invited_count in top_referrers:
-                lines.append(f"- {ref_id}: {invited_count}")
-
-        lines.append("")
-        lines.append("Последние активные:")
-        if not recent_users:
-            lines.append("- список пуст")
-        else:
-            for user_row in recent_users:
-                username = user_row["username"]
-                username_text = f"@{username}" if username else "без username"
-                invited_by = user_row["invited_by"]
-                invited_by_text = str(invited_by) if invited_by is not None else "-"
-                invited_count = await storage.count_invited_by(int(user_row["tg_id"]))
-                lines.append(
-                    f"- {user_row['tg_id']} ({username_text}) | invited_by: {invited_by_text} | invited: {invited_count}"
-                )
-
-        back = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:menu")]]
+        users = await storage.get_users_page(page=page, page_size=USERS_PAGE_SIZE)
+        referred_users = await storage.count_users_with_referrer()
+        text = (
+            "Пользователи\n"
+            f"- всего: {total_users}\n"
+            f"- по приглашению: {referred_users}\n\n"
+            f"Страница {page} из {total_pages}\n"
+            "Нажмите на пользователя, чтобы открыть профиль."
         )
-        await callback.message.edit_text("\n".join(lines), reply_markup=back)
+        keyboard = build_users_keyboard(users=users, page=page, total_pages=total_pages)
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.answer()
+        return
+
+    if action[1] == "users_search":
+        await state.clear()
+        await state.set_state(UserSearchForm.query)
+        await _save_panel_ref(state, callback)
+        await callback.message.edit_text(
+            "Поиск пользователя\n\n"
+            "Отправьте tg_id, @username или часть имени.\n"
+            "Например: 123456789 или @username",
+            reply_markup=build_wizard_keyboard("admin:users:1"),
+        )
+        await callback.answer()
+        return
+
+    if action[1] == "usersearch":
+        await state.clear()
+        if len(action) < 3 or not action[2].isdigit():
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+
+        tg_id = int(action[2])
+        user_data = await storage.get_user_by_tg_id(tg_id)
+        if user_data is None:
+            await callback.answer("Пользователь не найден", show_alert=True)
+            return
+
+        invited_count = await storage.count_invited_by(tg_id)
+        username = user_data["username"]
+        username_text = f"@{username}" if username else "-"
+        full_name = user_data["full_name"] or "-"
+        invited_by = user_data["invited_by"]
+        invited_by_text = str(invited_by) if invited_by is not None else "-"
+        text = (
+            "Профиль пользователя\n"
+            f"- tg_id: {user_data['tg_id']}\n"
+            f"- username: {username_text}\n"
+            f"- имя: {full_name}\n"
+            f"- invited_by: {invited_by_text}\n"
+            f"- пригласил: {invited_count}\n"
+            f"- first_seen: {user_data['first_seen']}\n"
+            f"- last_seen: {user_data['last_seen']}"
+        )
+        await callback.message.edit_text(
+            text,
+            reply_markup=build_user_profile_keyboard("admin:users_search", tg_id, 1),
+        )
+        await callback.answer()
+        return
+
+    if action[1] == "user":
+        await state.clear()
+        if len(action) < 4:
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+
+        if not action[2].isdigit() or not action[3].isdigit():
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+
+        tg_id = int(action[2])
+        page = max(1, int(action[3]))
+        user_data = await storage.get_user_by_tg_id(tg_id)
+        if user_data is None:
+            await callback.answer("Пользователь не найден", show_alert=True)
+            return
+
+        invited_count = await storage.count_invited_by(tg_id)
+        username = user_data["username"]
+        username_text = f"@{username}" if username else "-"
+        full_name = user_data["full_name"] or "-"
+        invited_by = user_data["invited_by"]
+        invited_by_text = str(invited_by) if invited_by is not None else "-"
+        text = (
+            "Профиль пользователя\n"
+            f"- tg_id: {user_data['tg_id']}\n"
+            f"- username: {username_text}\n"
+            f"- имя: {full_name}\n"
+            f"- invited_by: {invited_by_text}\n"
+            f"- пригласил: {invited_count}\n"
+            f"- first_seen: {user_data['first_seen']}\n"
+            f"- last_seen: {user_data['last_seen']}"
+        )
+        await callback.message.edit_text(
+            text,
+            reply_markup=build_user_profile_keyboard(f"admin:users:{page}", tg_id, page),
+        )
+        await callback.answer()
+        return
+
+    if action[1] == "user_write":
+        if len(action) < 4 or not action[2].isdigit() or not action[3].isdigit():
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+
+        tg_id = int(action[2])
+        page = int(action[3])
+        user_data = await storage.get_user_by_tg_id(tg_id)
+        if user_data is None:
+            await callback.answer("Пользователь не найден", show_alert=True)
+            return
+
+        await state.clear()
+        await state.set_state(UserWriteForm.text)
+        await _save_panel_ref(state, callback)
+        await state.update_data(write_target_tg_id=tg_id, write_back_page=page)
+        await callback.message.edit_text(
+            "Сообщение пользователю\n\n"
+            f"Получатель: {tg_id}\n"
+            "Отправьте текст одним сообщением.",
+            reply_markup=build_wizard_keyboard(f"admin:user:{tg_id}:{page}"),
+        )
         await callback.answer()
         return
 
@@ -373,6 +542,126 @@ async def cancel_admin_state(message: Message, state: FSMContext, admin_ids: set
         )
         return
     await message.answer("Действие отменено.", reply_markup=build_admin_menu())
+
+
+@router.message(UserSearchForm.query)
+async def user_search_query(
+    message: Message,
+    state: FSMContext,
+    admin_ids: set[int],
+    storage: Storage,
+    bot: Bot,
+) -> None:
+    if not _is_admin(message.from_user.id, admin_ids):
+        return
+
+    query = (message.text or "").strip()
+    await _safe_delete_message(message)
+    if not query:
+        await _edit_panel(
+            bot,
+            state,
+            "Поиск пользователя\n\n"
+            "Запрос пустой. Отправьте tg_id, @username или часть имени.",
+            build_wizard_keyboard("admin:users:1"),
+        )
+        return
+
+    normalized = query[1:] if query.startswith("@") else query
+    users = await storage.search_users(normalized, limit=10)
+    if not users:
+        await _edit_panel(
+            bot,
+            state,
+            "Ничего не найдено.",
+            InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="🔎 Новый поиск", callback_data="admin:users_search")],
+                    [InlineKeyboardButton(text="👥 К списку", callback_data="admin:users:1")],
+                ]
+            ),
+        )
+        await state.clear()
+        return
+
+    text = f"Результаты поиска по запросу: {query}\nНайдено: {len(users)}"
+    await _edit_panel(bot, state, text, build_user_search_results_keyboard(users))
+    await state.clear()
+
+
+@router.message(UserWriteForm.text)
+async def user_write_message(
+    message: Message,
+    state: FSMContext,
+    admin_ids: set[int],
+    storage: Storage,
+    bot: Bot,
+) -> None:
+    if not _is_admin(message.from_user.id, admin_ids):
+        return
+
+    text_to_send = (message.text or "").strip()
+    await _safe_delete_message(message)
+    data = await state.get_data()
+    target_tg_id = int(data.get("write_target_tg_id", 0))
+    page = int(data.get("write_back_page", 1))
+    if not target_tg_id:
+        await state.clear()
+        await message.answer("Не удалось определить получателя.", reply_markup=build_admin_menu())
+        return
+
+    if not text_to_send:
+        await _edit_panel(
+            bot,
+            state,
+            "Сообщение пользователю\n\nТекст пустой. Отправьте текст одним сообщением.",
+            build_wizard_keyboard(f"admin:user:{target_tg_id}:{page}"),
+        )
+        return
+
+    user_data = await storage.get_user_by_tg_id(target_tg_id)
+    if user_data is None:
+        await _edit_panel(
+            bot,
+            state,
+            "Пользователь не найден.",
+            InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="⬅️ В меню", callback_data="admin:menu")]]
+            ),
+        )
+        await state.clear()
+        return
+
+    try:
+        await bot.send_message(chat_id=target_tg_id, text=text_to_send, disable_web_page_preview=True)
+        result_text = f"Сообщение отправлено пользователю {target_tg_id}."
+    except (TelegramForbiddenError, TelegramBadRequest):
+        result_text = f"Не удалось отправить сообщение пользователю {target_tg_id}."
+
+    invited_count = await storage.count_invited_by(target_tg_id)
+    username = user_data["username"]
+    username_text = f"@{username}" if username else "-"
+    full_name = user_data["full_name"] or "-"
+    invited_by = user_data["invited_by"]
+    invited_by_text = str(invited_by) if invited_by is not None else "-"
+    profile_text = (
+        "Профиль пользователя\n"
+        f"- tg_id: {user_data['tg_id']}\n"
+        f"- username: {username_text}\n"
+        f"- имя: {full_name}\n"
+        f"- invited_by: {invited_by_text}\n"
+        f"- пригласил: {invited_count}\n"
+        f"- first_seen: {user_data['first_seen']}\n"
+        f"- last_seen: {user_data['last_seen']}\n\n"
+        f"{result_text}"
+    )
+    await _edit_panel(
+        bot,
+        state,
+        profile_text,
+        build_user_profile_keyboard(f"admin:users:{page}", target_tg_id, page),
+    )
+    await state.clear()
 
 
 @router.message(AddProxyForm.name)
