@@ -62,8 +62,16 @@ def build_share_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def build_share_actions_keyboard(tg_link: str) -> InlineKeyboardMarkup:
-    share_url = f"https://t.me/share/url?text={quote(tg_link, safe='')}"
+def build_share_actions_keyboard(tme_link: str, tg_link: str) -> InlineKeyboardMarkup:
+    share_text = (
+        "Бесплатный MTProto прокси для Telegram.\n"
+        "Подходит только для Telegram (не VPN).\n"
+        f"tg:// ссылка: {tg_link}"
+    )
+    share_url = (
+        f"https://t.me/share/url?url={quote(tme_link, safe='')}"
+        f"&text={quote(share_text, safe='')}"
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📨 Отправить в чат", url=share_url)],
@@ -318,14 +326,17 @@ async def cb_user_share(
 
     proxy = proxies[0]
     tg_link = proxy.tg_link
+    tme_link = proxy.tme_link
     text = (
-        "<b>Поделитесь этой ссылкой:</b>\n"
-        f"{tg_link}"
+        "<b>Поделитесь этим прокси:</b>\n"
+        "Бесплатный MTProto прокси для Telegram.\n"
+        f"tg:// ссылка: {tg_link}\n"
+        f"Подключить в 1 тап: {tme_link}"
     )
     await _safe_edit(
         callback,
         text,
-        reply_markup=build_share_actions_keyboard(tg_link),
+        reply_markup=build_share_actions_keyboard(tme_link, tg_link),
         disable_web_page_preview=True,
     )
     await callback.answer()

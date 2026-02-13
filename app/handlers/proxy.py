@@ -120,14 +120,24 @@ async def cmd_share(
         return
 
     proxy = proxies[0]
-    encoded_tg_link = quote(proxy.tg_link, safe="")
+    share_text = (
+        "Бесплатный MTProto прокси для Telegram.\n"
+        "Подходит только для Telegram (не VPN).\n"
+        f"tg:// ссылка: {proxy.tg_link}"
+    )
+    share_url = (
+        f"https://t.me/share/url?url={quote(proxy.tme_link, safe='')}"
+        f"&text={quote(share_text, safe='')}"
+    )
     text = (
-        "<b>Поделитесь этой ссылкой:</b>\n"
-        f"{proxy.tg_link}"
+        "<b>Поделитесь этим прокси:</b>\n"
+        "Бесплатный MTProto прокси для Telegram.\n"
+        f"tg:// ссылка: {proxy.tg_link}\n"
+        f"Подключить в 1 тап: {proxy.tme_link}"
     )
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📨 Отправить в чат", url=f"https://t.me/share/url?text={encoded_tg_link}")],
+            [InlineKeyboardButton(text="📨 Отправить в чат", url=share_url)],
             [InlineKeyboardButton(text="📋 Скопировать tg://", callback_data="copy_tg:0")],
             [InlineKeyboardButton(text="✅ Подключить", url=proxy.tme_link)],
             [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="user:home")],
