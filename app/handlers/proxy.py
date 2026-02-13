@@ -123,12 +123,10 @@ async def cmd_share(
     share_text = (
         "Бесплатный MTProto прокси для Telegram.\n"
         "Подходит только для Telegram (не VPN).\n"
+        f"Подключить в 1 тап: {proxy.tme_link}\n"
         f"tg:// ссылка: {proxy.tg_link}"
     )
-    share_url = (
-        f"https://t.me/share/url?url={quote(proxy.tme_link, safe='')}"
-        f"&text={quote(share_text, safe='')}"
-    )
+    share_url = f"https://t.me/share/url?text={quote(share_text, safe='')}"
     text = (
         "<b>Поделитесь этим прокси:</b>\n"
         "Бесплатный MTProto прокси для Telegram.\n"
