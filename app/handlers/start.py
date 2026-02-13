@@ -63,7 +63,7 @@ def build_share_keyboard() -> InlineKeyboardMarkup:
 
 
 def build_share_actions_keyboard(tg_link: str) -> InlineKeyboardMarkup:
-    share_url = f"https://t.me/share/url?url=&text={quote(tg_link)}"
+    share_url = f"https://t.me/share/url?text={quote(tg_link, safe='')}"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📨 Отправить в чат", url=share_url)],

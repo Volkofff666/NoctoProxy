@@ -127,7 +127,7 @@ async def cmd_share(
     )
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📨 Отправить в чат", url=f"https://t.me/share/url?url=&text={encoded_tg_link}")],
+            [InlineKeyboardButton(text="📨 Отправить в чат", url=f"https://t.me/share/url?text={encoded_tg_link}")],
             [InlineKeyboardButton(text="📋 Скопировать tg://", callback_data="copy_tg:0")],
             [InlineKeyboardButton(text="✅ Подключить", url=proxy.tme_link)],
             [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="user:home")],
