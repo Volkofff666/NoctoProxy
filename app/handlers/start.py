@@ -64,12 +64,13 @@ def build_share_keyboard() -> InlineKeyboardMarkup:
 
 def build_share_actions_keyboard(tme_link: str, tg_link: str) -> InlineKeyboardMarkup:
     share_text = (
-        "Бесплатный MTProto прокси для Telegram.\n"
-        "Подходит только для Telegram (не VPN).\n"
-        f"Подключить в 1 тап: {tme_link}\n"
-        f"tg:// ссылка: {tg_link}"
+        "Бесплатный MTProto прокси для Telegram. "
+        "Работает только для Telegram (не VPN)."
     )
-    share_url = f"https://t.me/share/url?text={quote(share_text, safe='')}"
+    share_url = (
+        f"https://t.me/share/url?url={quote(tme_link, safe='')}"
+        f"&text={quote(share_text, safe='')}"
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📨 Отправить в чат", url=share_url)],
