@@ -1,9 +1,10 @@
 ﻿from __future__ import annotations
 
+from urllib.parse import quote
+
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery
-from urllib.parse import quote
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.services.proxy_links import ProxyStore
 from app.services.rate_limit import InMemoryRateLimiter
@@ -56,17 +57,17 @@ async def cmd_proxy(
         return
 
     intro = (
-        "Доступные бесплатные прокси для Telegram.\n"
-        "Можно добавить как дополнительный адрес и включить авто-переключение прокси в настройках Telegram."
+        "<b>Доступные прокси для Telegram</b>\n"
+        "Рекомендуется добавить несколько серверов и включить автопереключение."
     )
     await message.answer(intro)
 
     for idx, proxy in enumerate(proxies):
         text = (
-            f"{idx + 1}. {proxy.name}\n"
-            f"server: {proxy.server}\n"
-            f"port: {proxy.port}\n"
-            f"secret: {proxy.secret}"
+            f"<b>{idx + 1}. {proxy.name}</b>\n"
+            f"<b>server:</b> <code>{proxy.server}</code>\n"
+            f"<b>port:</b> <code>{proxy.port}</code>\n"
+            f"<b>secret:</b> <code>{proxy.secret}</code>"
         )
         keyboard = build_proxy_keyboard(idx, proxy.name, proxy.tme_link)
         await message.answer(text, reply_markup=keyboard)
@@ -92,6 +93,7 @@ async def cb_copy_tg(
         username=user.username,
         full_name=user.full_name,
     )
+    await storage.set_user_proxy_connected(user.id, connected=True)
     proxy = proxies[index]
     await callback.message.answer(f"tg:// ссылка для {proxy.name}:\n{proxy.tg_link}")
     await callback.answer("Отправил tg:// ссылку")
@@ -120,8 +122,9 @@ async def cmd_share(
         return
 
     proxy = proxies[0]
+    await storage.record_share(user.id, source="cmd_share")
     share_text = (
-        "Бесплатный MTProto прокси для Telegram. "
+        "Бесплатный Proxy для Telegram. "
         "Работает только для Telegram (не VPN)."
     )
     share_url = (
@@ -130,9 +133,9 @@ async def cmd_share(
     )
     text = (
         "<b>Поделитесь этим прокси:</b>\n"
-        "Бесплатный MTProto прокси для Telegram.\n"
-        f"tg:// ссылка: {proxy.tg_link}\n"
-        f"Подключить в 1 тап: {proxy.tme_link}"
+        "Бесплатный Proxy для Telegram.\n\n"
+        f"<b>tg:// ссылка:</b> {proxy.tg_link}\n"
+        f"<b>Подключить в 1 тап:</b> {proxy.tme_link}"
     )
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[

@@ -47,7 +47,7 @@ async def inline_share(
         results.append(
             InlineQueryResultArticle(
                 id=f"proxy_{idx}",
-                title=f"{proxy.name} - MTProto proxy",
+                title=f"{proxy.name} - Proxy",
                 description=f"{proxy.server}:{proxy.port}",
                 input_message_content=InputTextMessageContent(
                     message_text=build_share_text(proxy),

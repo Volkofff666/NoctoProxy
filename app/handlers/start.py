@@ -1,10 +1,11 @@
 ﻿from __future__ import annotations
 
+from urllib.parse import quote
+
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from urllib.parse import quote
 
 from app.services.proxy_links import ProxyItem, ProxyStore
 from app.services.storage import Storage
@@ -15,21 +16,27 @@ router = Router()
 def build_start_keyboard(
     proxy_url: str,
     support_username: str,
-    tribute_url: str | None,
+    channel_url: str | None,
+    show_admin_panel: bool,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="✅ Подключить прокси", url=proxy_url)],
-        [InlineKeyboardButton(text="📤 Поделиться", callback_data="user:share")],
-        [InlineKeyboardButton(text="📌 Инструкция", callback_data="user:instruction")],
-        [
-            InlineKeyboardButton(
-                text="💬 Поддержка",
-                url=f"https://t.me/{support_username}",
-            )
-        ]
     ]
-    if tribute_url:
-        rows.append([InlineKeyboardButton(text="❤️ Поддержать проект", url=tribute_url)])
+
+    secondary_buttons: list[InlineKeyboardButton] = [
+        InlineKeyboardButton(text="📚 Все прокси", callback_data="user:proxies"),
+        InlineKeyboardButton(text="📤 Поделиться", callback_data="user:share"),
+        InlineKeyboardButton(text="📌 Инструкция", callback_data="user:instruction"),
+        InlineKeyboardButton(text="💬 Поддержка", url=f"https://t.me/{support_username}"),
+    ]
+    if channel_url:
+        secondary_buttons.append(InlineKeyboardButton(text="📣 Подписаться на канал", url=channel_url))
+    if show_admin_panel:
+        secondary_buttons.append(InlineKeyboardButton(text="🛠 Админ панель", callback_data="admin:menu"))
+
+    for idx in range(0, len(secondary_buttons), 2):
+        rows.append(secondary_buttons[idx:idx + 2])
+
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -64,7 +71,7 @@ def build_share_keyboard() -> InlineKeyboardMarkup:
 
 def build_share_actions_keyboard(tme_link: str, tg_link: str) -> InlineKeyboardMarkup:
     share_text = (
-        "Бесплатный MTProto прокси для Telegram. "
+        "Бесплатный Proxy для Telegram. "
         "Работает только для Telegram (не VPN)."
     )
     share_url = (
@@ -79,29 +86,11 @@ def build_share_actions_keyboard(tme_link: str, tg_link: str) -> InlineKeyboardM
     )
 
 
-def _extract_referrer(command: CommandObject | None, self_id: int) -> int | None:
-    if not command or not command.args:
-        return None
-
-    args = command.args.strip()
-    if not args.startswith("ref_"):
-        return None
-
-    raw_id = args.removeprefix("ref_")
-    if not raw_id.isdigit():
-        return None
-
-    inviter_id = int(raw_id)
-    if inviter_id == self_id:
-        return None
-    return inviter_id
-
-
 def _main_menu_text() -> str:
     return (
-        "<b>Полностью бесплатный MTProto прокси для Telegram.</b>\n"
-        "Работает только для Telegram (это не VPN), чтобы Telegram оставался доступен всегда.\n\n"
-        "Выберите действие:"
+        "<b>Бесплатный Proxy для Telegram</b>\n\n"
+        "Подходит только для Telegram (это <b>не VPN</b>) и не влияет на другие приложения.\n"
+        "Выберите действие ниже:"
     )
 
 
@@ -125,17 +114,15 @@ async def _safe_edit(
 @router.message(CommandStart())
 async def cmd_start(
     message: Message,
-    command: CommandObject | None,
     proxy_store: ProxyStore,
     storage: Storage,
     support_username: str,
-    tribute_url: str | None,
+    channel_url: str | None,
+    admin_ids: set[int],
 ) -> None:
     user = message.from_user
-    referrer_id = _extract_referrer(command, user.id)
     await storage.touch_user(
         tg_id=user.id,
-        invited_by=referrer_id,
         username=user.username,
         full_name=user.full_name,
     )
@@ -151,7 +138,12 @@ async def cmd_start(
         return
 
     main_proxy = enabled[0]
-    keyboard = build_start_keyboard(main_proxy.tme_link, support_username, tribute_url)
+    keyboard = build_start_keyboard(
+        main_proxy.tme_link,
+        support_username,
+        channel_url,
+        show_admin_panel=user.id in admin_ids,
+    )
     await message.answer(_main_menu_text(), reply_markup=keyboard)
 
 
@@ -165,13 +157,12 @@ async def cmd_invite(message: Message, storage: Storage) -> None:
     )
 
     me = await message.bot.get_me()
-    invite_link = f"https://t.me/{me.username}?start=ref_{user.id}"
-    invited_count = await storage.count_invited_by(user.id)
+    invite_link = f"https://t.me/{me.username}"
+    await storage.record_share(user.id, source="cmd_invite")
     text = (
-        "Ваша ссылка для приглашения:\n"
+        "<b>Ссылка, чтобы поделиться ботом</b>\n"
         f"{invite_link}\n\n"
-        f"Вы пригласили: {invited_count}\n\n"
-        "Поделитесь ссылкой с друзьями."
+        "Отправьте ссылку друзьям, чтобы они могли быстро подключить Proxy."
     )
     await message.answer(text, reply_markup=build_invite_keyboard(), disable_web_page_preview=True)
 
@@ -182,7 +173,8 @@ async def cb_user_home(
     proxy_store: ProxyStore,
     storage: Storage,
     support_username: str,
-    tribute_url: str | None,
+    channel_url: str | None,
+    admin_ids: set[int],
 ) -> None:
     user = callback.from_user
     await storage.touch_user(
@@ -203,7 +195,12 @@ async def cb_user_home(
         return
 
     main_proxy = enabled[0]
-    keyboard = build_start_keyboard(main_proxy.tme_link, support_username, tribute_url)
+    keyboard = build_start_keyboard(
+        main_proxy.tme_link,
+        support_username,
+        channel_url,
+        show_admin_panel=user.id in admin_ids,
+    )
     await _safe_edit(callback, _main_menu_text(), reply_markup=keyboard)
     await callback.answer()
 
@@ -222,11 +219,11 @@ async def cb_instruction(
     )
 
     text = (
-        "<b>Как включить прокси:</b>\n"
-        "1. Откройте Telegram -> Настройки -> Данные и память -> Прокси.\n"
-        "2. Добавьте адрес через кнопку подключения или вставьте tg:// ссылку.\n"
-        "3. Включите Использовать прокси.\n"
-        "4. В этом же разделе включите авто-переключение прокси.\n\n"
+        "<b>Как подключить прокси</b>\n\n"
+        "1. Нажмите кнопку <b>Подключить</b> у нужного сервера.\n"
+        "2. Telegram откроет экран добавления прокси.\n"
+        "3. Подтвердите добавление и включите <b>Использовать прокси</b>.\n"
+        "4. Рекомендуем включить <b>Автопереключение</b> в том же разделе.\n\n"
         f"<b>Поддержка:</b> https://t.me/{support_username}"
     )
     await _safe_edit(callback, text, reply_markup=build_instruction_keyboard())
@@ -259,12 +256,12 @@ async def cb_user_proxies(
         return
 
     lines = [
-        "Бесплатные прокси для Telegram:",
-        "Можно добавить как дополнительный адрес и включить авто-переключение.",
+        "<b>Доступные прокси для Telegram</b>",
+        "Добавьте несколько серверов и включите автопереключение в Telegram.",
         "",
     ]
     for idx, proxy in enumerate(proxies):
-        lines.append(f"{idx + 1}. {proxy.name} | {proxy.server}:{proxy.port}")
+        lines.append(f"{idx + 1}. <b>{proxy.name}</b> | <code>{proxy.server}:{proxy.port}</code>")
     await _safe_edit(callback, "\n".join(lines), reply_markup=build_proxy_list_keyboard(proxies))
     await callback.answer()
 
@@ -282,12 +279,12 @@ async def cb_user_invite(
     )
 
     me = await callback.bot.get_me()
-    invite_link = f"https://t.me/{me.username}?start=ref_{user.id}"
-    invited_count = await storage.count_invited_by(user.id)
+    invite_link = f"https://t.me/{me.username}"
+    await storage.record_share(user.id, source="cb_invite")
     text = (
-        "Ваша ссылка для приглашения:\n"
+        "<b>Ссылка, чтобы поделиться ботом</b>\n"
         f"{invite_link}\n\n"
-        f"Вы пригласили: {invited_count}"
+        "Отправьте ее друзьям."
     )
     await _safe_edit(
         callback,
@@ -324,13 +321,14 @@ async def cb_user_share(
         return
 
     proxy = proxies[0]
+    await storage.record_share(user.id, source="cb_share")
     tg_link = proxy.tg_link
     tme_link = proxy.tme_link
     text = (
         "<b>Поделитесь этим прокси:</b>\n"
-        "Бесплатный MTProto прокси для Telegram.\n"
-        f"tg:// ссылка: {tg_link}\n"
-        f"Подключить в 1 тап: {tme_link}"
+        "Бесплатный Proxy для Telegram.\n\n"
+        f"<b>tg:// ссылка:</b> {tg_link}\n"
+        f"<b>Подключить в 1 тап:</b> {tme_link}"
     )
     await _safe_edit(
         callback,

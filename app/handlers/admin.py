@@ -71,7 +71,34 @@ def build_admin_menu() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="📣 Рассылка", callback_data="admin:broadcast")],
             [InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats")],
             [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:users")],
+            [InlineKeyboardButton(text="⬅️ В главное меню", callback_data="user:home")],
         ]
+    )
+
+
+def build_admin_dashboard_text(
+    total_users: int,
+    active_users: int,
+    new_users: int,
+    unique_sharers: int,
+    shares_24h: int,
+    total_shares: int,
+    total_proxies: int,
+    enabled_proxies: int,
+) -> str:
+    return (
+        "<b>Панель администратора</b>\n\n"
+        "<b>Пользователи</b>\n"
+        f"• Всего: <b>{total_users}</b>\n"
+        f"• Активные за 24ч: <b>{active_users}</b>\n"
+        f"• Новые за 24ч: <b>{new_users}</b>\n"
+        f"• Поделились ботом: <b>{unique_sharers}</b>\n"
+        f"• Share-действий за 24ч: <b>{shares_24h}</b>\n"
+        f"• Всего share-действий: <b>{total_shares}</b>\n\n"
+        "<b>Прокси</b>\n"
+        f"• Всего: <b>{total_proxies}</b>\n"
+        f"• Включено: <b>{enabled_proxies}</b>\n\n"
+        "Выберите действие:"
     )
 
 
@@ -110,14 +137,16 @@ def build_users_keyboard(
         username = user["username"]
         full_name = (user.get("full_name") or "").strip()
         blocked = bool(user.get("is_blocked"))
+        connected = bool(user.get("is_proxy_connected"))
         status_icon = "⛔" if blocked else "✅"
+        proxy_icon = "🟢" if connected else "⚪"
         if username:
             user_text = f"@{username}"
         elif full_name:
             user_text = full_name
         else:
             user_text = str(tg_id)
-        label = f"{status_icon} {user_text} | {_humanize_last_seen(str(user['last_seen']))}"
+        label = f"{status_icon}{proxy_icon} {user_text} | {_humanize_last_seen(str(user['last_seen']))}"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"admin:user:{tg_id}:{page}:l")])
 
     nav_row: list[InlineKeyboardButton] = []
@@ -142,7 +171,6 @@ def build_user_profile_keyboard(tg_id: int, page: int, source: str) -> InlineKey
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="✉️ Отправить сообщение", callback_data=f"admin:uw:{tg_id}:{page}:{source}")],
-            [InlineKeyboardButton(text="🤝 Рефералы", callback_data=f"admin:ur:{tg_id}:{page}:{source}")],
             [InlineKeyboardButton(text="⚠️ Ограничить / Разблокировать", callback_data=f"admin:ub:{tg_id}:{page}:{source}")],
             [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"admin:ud:{tg_id}:{page}:{source}")],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)],
@@ -165,6 +193,26 @@ def build_user_search_results_keyboard(users: list[dict[str, str | int | None]])
     rows.append([InlineKeyboardButton(text="👥 К списку пользователей", callback_data="admin:users:1")])
     rows.append([InlineKeyboardButton(text="🏠 В меню", callback_data="admin:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _format_top_sharers(top_sharers: list[dict[str, str | int | None]]) -> str:
+    if not top_sharers:
+        return "• Пока нет данных"
+
+    lines: list[str] = []
+    for idx, item in enumerate(top_sharers, start=1):
+        tg_id = int(item["tg_id"])
+        username = item["username"]
+        full_name = (item.get("full_name") or "").strip()
+        share_count = int(item["share_count"])
+        if username:
+            label = f"@{username}"
+        elif full_name:
+            label = full_name
+        else:
+            label = str(tg_id)
+        lines.append(f"{idx}. {label} ({tg_id}) - <b>{share_count}</b>")
+    return "\n".join(lines)
 
 
 def _add_step_text(step: str, data: dict) -> str:
@@ -231,13 +279,37 @@ async def _safe_delete_message(message: Message) -> None:
 
 
 @router.message(Command("admin"))
-async def cmd_admin(message: Message, admin_ids: set[int], state: FSMContext) -> None:
+async def cmd_admin(
+    message: Message,
+    admin_ids: set[int],
+    state: FSMContext,
+    storage: Storage,
+    proxy_store: ProxyStore,
+) -> None:
     if not _is_admin(message.from_user.id, admin_ids):
         await message.answer("Недостаточно прав.")
         return
 
     await state.clear()
-    await message.answer("Админ-меню", reply_markup=build_admin_menu())
+    total_users = await storage.count_users()
+    active_users = await storage.count_active_users_last_hours(24)
+    new_users = await storage.count_new_users_last_hours(24)
+    unique_sharers = await storage.count_unique_sharers()
+    shares_24h = await storage.count_shares_last_hours(24)
+    total_shares = await storage.count_total_shares()
+    proxies = proxy_store.load_all()
+    enabled_proxies = len([proxy for proxy in proxies if proxy.enabled])
+    text = build_admin_dashboard_text(
+        total_users=total_users,
+        active_users=active_users,
+        new_users=new_users,
+        unique_sharers=unique_sharers,
+        shares_24h=shares_24h,
+        total_shares=total_shares,
+        total_proxies=len(proxies),
+        enabled_proxies=enabled_proxies,
+    )
+    await message.answer(text, reply_markup=build_admin_menu())
 
 
 @router.callback_query(F.data.startswith("admin:"))
@@ -256,7 +328,25 @@ async def cb_admin_actions(
 
     if action[1] == "menu":
         await state.clear()
-        await callback.message.edit_text("Админ-меню", reply_markup=build_admin_menu())
+        total_users = await storage.count_users()
+        active_users = await storage.count_active_users_last_hours(24)
+        new_users = await storage.count_new_users_last_hours(24)
+        unique_sharers = await storage.count_unique_sharers()
+        shares_24h = await storage.count_shares_last_hours(24)
+        total_shares = await storage.count_total_shares()
+        proxies = proxy_store.load_all()
+        enabled_proxies = len([proxy for proxy in proxies if proxy.enabled])
+        text = build_admin_dashboard_text(
+            total_users=total_users,
+            active_users=active_users,
+            new_users=new_users,
+            unique_sharers=unique_sharers,
+            shares_24h=shares_24h,
+            total_shares=total_shares,
+            total_proxies=len(proxies),
+            enabled_proxies=enabled_proxies,
+        )
+        await callback.message.edit_text(text, reply_markup=build_admin_menu())
         await callback.answer()
         return
 
@@ -398,14 +488,27 @@ async def cb_admin_actions(
         total_users = await storage.count_users()
         active_users = await storage.count_active_users_last_hours(24)
         new_users = await storage.count_new_users_last_hours(24)
-        referred_users = await storage.count_users_with_referrer()
+        unique_sharers = await storage.count_unique_sharers()
+        shares_24h = await storage.count_shares_last_hours(24)
+        total_shares = await storage.count_total_shares()
+        top_sharers = await storage.get_top_sharers_last_hours(hours=24, limit=5)
+        proxies = proxy_store.load_all()
+        enabled_proxies = len([proxy for proxy in proxies if proxy.enabled])
 
         text = (
-            "Статистика пользователей:\n"
-            f"- всего пользователей: {total_users}\n"
-            f"- активные за 24ч: {active_users}\n"
-            f"- новые за 24ч: {new_users}\n"
-            f"- пришли по приглашению: {referred_users}"
+            "<b>Статистика бота</b>\n\n"
+            "<b>Пользователи</b>\n"
+            f"• Всего: <b>{total_users}</b>\n"
+            f"• Активные за 24ч: <b>{active_users}</b>\n"
+            f"• Новые за 24ч: <b>{new_users}</b>\n"
+            f"• Поделились ботом: <b>{unique_sharers}</b>\n"
+            f"• Share-действий за 24ч: <b>{shares_24h}</b>\n"
+            f"• Всего share-действий: <b>{total_shares}</b>\n\n"
+            "<b>Прокси</b>\n"
+            f"• Всего: <b>{len(proxies)}</b>\n"
+            f"• Включено: <b>{enabled_proxies}</b>\n\n"
+            "<b>Топ-5 по шерам за 24ч</b>\n"
+            f"{_format_top_sharers(top_sharers)}"
         )
         back = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:menu")]]
@@ -430,10 +533,11 @@ async def cb_admin_actions(
             page = total_pages
 
         users = await storage.get_users_page(page=page, page_size=USERS_PAGE_SIZE)
-        referred_users = await storage.count_users_with_referrer()
+        unique_sharers = await storage.count_unique_sharers()
         text = (
             f"👥 Список пользователей (стр. {page}/{total_pages})\n\n"
-            f"Всего: {total_users} | По приглашению: {referred_users}\n"
+            f"Всего: {total_users} | Поделились ботом: {unique_sharers}\n"
+            "Иконки: ✅/⛔ статус, 🟢/⚪ proxy\n"
             "Нажмите на пользователя для управления:"
         )
         keyboard = build_users_keyboard(users=users, page=page, total_pages=total_pages)
@@ -472,22 +576,20 @@ async def cb_admin_actions(
             await callback.answer("Пользователь не найден", show_alert=True)
             return
 
-        invited_count = await storage.count_invited_by(tg_id)
         username = user_data["username"]
         username_text = f"@{username}" if username else "-"
         full_name = user_data["full_name"] or "-"
-        invited_by = user_data["invited_by"]
-        invited_by_text = str(invited_by) if invited_by is not None else "-"
         blocked = bool(user_data.get("is_blocked"))
         status_text = "⛔ Ограничен" if blocked else "✅ Активен"
+        proxy_connected = bool(user_data.get("is_proxy_connected"))
+        proxy_status = "🟢 Подключил" if proxy_connected else "⚪ Не подключил"
         text = (
             "Профиль пользователя\n"
             f"- статус: {status_text}\n"
+            f"- proxy: {proxy_status}\n"
             f"- tg_id: {user_data['tg_id']}\n"
             f"- username: {username_text}\n"
             f"- имя: {full_name}\n"
-            f"- invited_by: {invited_by_text}\n"
-            f"- пригласил: {invited_count}\n"
             f"- first_seen: {user_data['first_seen']}\n"
             f"- last_seen: {_humanize_last_seen(str(user_data['last_seen']))}\n"
             f"- дней в боте: {_days_since(str(user_data['first_seen']))}"
@@ -522,36 +624,6 @@ async def cb_admin_actions(
         await callback.answer()
         return
 
-    if action[1] == "ur":
-        if len(action) < 5 or not action[2].isdigit() or not action[3].isdigit():
-            await callback.answer("Некорректные данные", show_alert=True)
-            return
-
-        tg_id = int(action[2])
-        page = int(action[3])
-        source = action[4] if action[4] in {"l", "s"} else "l"
-        refs = await storage.get_referred_users(tg_id, limit=20)
-        invited_count = await storage.count_invited_by(tg_id)
-        lines = [f"Рефералы пользователя {tg_id}", f"Всего приглашено: {invited_count}", ""]
-        if not refs:
-            lines.append("Список пуст")
-        else:
-            for user in refs:
-                uname = user["username"]
-                title = f"@{uname}" if uname else str(user["tg_id"])
-                lines.append(f"- {title} | {_humanize_last_seen(str(user['last_seen']))}")
-        await callback.message.edit_text(
-            "\n".join(lines),
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [InlineKeyboardButton(text="⬅️ К профилю", callback_data=f"admin:user:{tg_id}:{page}:{source}")],
-                    [InlineKeyboardButton(text="🏠 В меню", callback_data="admin:menu")],
-                ]
-            ),
-        )
-        await callback.answer()
-        return
-
     if action[1] == "ub":
         if len(action) < 5 or not action[2].isdigit() or not action[3].isdigit():
             await callback.answer("Некорректные данные", show_alert=True)
@@ -572,21 +644,19 @@ async def cb_admin_actions(
             await callback.answer("Пользователь не найден", show_alert=True)
             return
 
-        invited_count = await storage.count_invited_by(tg_id)
         username = updated["username"]
         username_text = f"@{username}" if username else "-"
         full_name = updated["full_name"] or "-"
-        invited_by = updated["invited_by"]
-        invited_by_text = str(invited_by) if invited_by is not None else "-"
         status_text = "⛔ Ограничен" if bool(updated.get("is_blocked")) else "✅ Активен"
+        proxy_connected = bool(updated.get("is_proxy_connected"))
+        proxy_status = "🟢 Подключил" if proxy_connected else "⚪ Не подключил"
         text = (
             "Профиль пользователя\n"
             f"- статус: {status_text}\n"
+            f"- proxy: {proxy_status}\n"
             f"- tg_id: {updated['tg_id']}\n"
             f"- username: {username_text}\n"
             f"- имя: {full_name}\n"
-            f"- invited_by: {invited_by_text}\n"
-            f"- пригласил: {invited_count}\n"
             f"- first_seen: {updated['first_seen']}\n"
             f"- last_seen: {_humanize_last_seen(str(updated['last_seen']))}\n"
             f"- дней в боте: {_days_since(str(updated['first_seen']))}"
@@ -625,10 +695,11 @@ async def cb_admin_actions(
         if page > total_pages:
             page = total_pages
         users = await storage.get_users_page(page=page, page_size=USERS_PAGE_SIZE)
-        referred_users = await storage.count_users_with_referrer()
+        unique_sharers = await storage.count_unique_sharers()
         text = (
             f"👥 Список пользователей (стр. {page}/{total_pages})\n\n"
-            f"Всего: {total_users} | По приглашению: {referred_users}\n"
+            f"Всего: {total_users} | Поделились ботом: {unique_sharers}\n"
+            "Иконки: ✅/⛔ статус, 🟢/⚪ proxy\n"
             "Нажмите на пользователя для управления:"
         )
         keyboard = build_users_keyboard(users=users, page=page, total_pages=total_pages)
@@ -760,19 +831,17 @@ async def user_write_message(
     except (TelegramForbiddenError, TelegramBadRequest):
         result_text = f"Не удалось отправить сообщение пользователю {target_tg_id}."
 
-    invited_count = await storage.count_invited_by(target_tg_id)
     username = user_data["username"]
     username_text = f"@{username}" if username else "-"
     full_name = user_data["full_name"] or "-"
-    invited_by = user_data["invited_by"]
-    invited_by_text = str(invited_by) if invited_by is not None else "-"
+    proxy_connected = bool(user_data.get("is_proxy_connected"))
+    proxy_status = "🟢 Подключил" if proxy_connected else "⚪ Не подключил"
     profile_text = (
         "Профиль пользователя\n"
+        f"- proxy: {proxy_status}\n"
         f"- tg_id: {user_data['tg_id']}\n"
         f"- username: {username_text}\n"
         f"- имя: {full_name}\n"
-        f"- invited_by: {invited_by_text}\n"
-        f"- пригласил: {invited_count}\n"
         f"- first_seen: {user_data['first_seen']}\n"
         f"- last_seen: {_humanize_last_seen(str(user_data['last_seen']))}\n"
         f"- дней в боте: {_days_since(str(user_data['first_seen']))}\n\n"

@@ -88,7 +88,7 @@ class ProxyStore:
 
 def build_share_text(proxy: ProxyItem) -> str:
     return (
-        f"MTProto proxy для Telegram: {proxy.name}\n"
+        f"Proxy для Telegram: {proxy.name}\n"
         f"Подключить: {proxy.tme_link}\n"
         f"tg:// ссылка: {proxy.tg_link}\n\n"
         "Это прокси только для Telegram (не VPN)."

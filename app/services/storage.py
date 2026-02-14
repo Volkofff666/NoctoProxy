@@ -25,17 +25,29 @@ class Storage:
                     tg_id INTEGER UNIQUE NOT NULL,
                     first_seen TEXT NOT NULL,
                     last_seen TEXT NOT NULL,
-                    invited_by INTEGER,
                     username TEXT,
                     full_name TEXT,
-                    is_blocked INTEGER NOT NULL DEFAULT 0
+                    is_blocked INTEGER NOT NULL DEFAULT 0,
+                    is_proxy_connected INTEGER NOT NULL DEFAULT 0,
+                    proxy_connected_at TEXT
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS share_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tg_id INTEGER NOT NULL,
+                    source TEXT,
+                    created_at TEXT NOT NULL
                 )
                 """
             )
             await self._ensure_users_columns(db)
             await db.execute("CREATE INDEX IF NOT EXISTS idx_users_last_seen ON users(last_seen)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_users_first_seen ON users(first_seen)")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_users_invited_by ON users(invited_by)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_share_events_tg_id ON share_events(tg_id)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_share_events_created_at ON share_events(created_at)")
             await db.commit()
 
     async def _ensure_users_columns(self, db: aiosqlite.Connection) -> None:
@@ -43,19 +55,20 @@ class Storage:
         rows = await cursor.fetchall()
         existing = {str(row[1]) for row in rows}
 
-        if "invited_by" not in existing:
-            await db.execute("ALTER TABLE users ADD COLUMN invited_by INTEGER")
         if "username" not in existing:
             await db.execute("ALTER TABLE users ADD COLUMN username TEXT")
         if "full_name" not in existing:
             await db.execute("ALTER TABLE users ADD COLUMN full_name TEXT")
         if "is_blocked" not in existing:
             await db.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0")
+        if "is_proxy_connected" not in existing:
+            await db.execute("ALTER TABLE users ADD COLUMN is_proxy_connected INTEGER NOT NULL DEFAULT 0")
+        if "proxy_connected_at" not in existing:
+            await db.execute("ALTER TABLE users ADD COLUMN proxy_connected_at TEXT")
 
     async def touch_user(
         self,
         tg_id: int,
-        invited_by: int | None = None,
         username: str | None = None,
         full_name: str | None = None,
     ) -> None:
@@ -63,18 +76,43 @@ class Storage:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
-                INSERT INTO users (tg_id, first_seen, last_seen, invited_by, username, full_name)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO users (tg_id, first_seen, last_seen, username, full_name)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(tg_id)
                 DO UPDATE SET
                     last_seen = excluded.last_seen,
                     username = excluded.username,
-                    full_name = excluded.full_name,
-                    invited_by = COALESCE(users.invited_by, excluded.invited_by)
+                    full_name = excluded.full_name
                 """,
-                (tg_id, now, now, invited_by, username, full_name),
+                (tg_id, now, now, username, full_name),
             )
             await db.commit()
+
+    async def record_share(self, tg_id: int, source: str | None = None) -> None:
+        now = utc_now_str()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO share_events (tg_id, source, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (int(tg_id), source, now),
+            )
+            await db.commit()
+
+    async def set_user_proxy_connected(self, tg_id: int, connected: bool = True) -> bool:
+        connected_at = utc_now_str() if connected else None
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                UPDATE users
+                SET is_proxy_connected = ?, proxy_connected_at = ?
+                WHERE tg_id = ?
+                """,
+                (1 if connected else 0, connected_at, int(tg_id)),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
 
     async def count_users(self) -> int:
         async with aiosqlite.connect(self.db_path) as db:
@@ -108,42 +146,72 @@ class Storage:
             row = await cursor.fetchone()
             return int(row[0] if row else 0)
 
-    async def count_users_with_referrer(self) -> int:
+    async def count_unique_sharers(self) -> int:
         async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute("SELECT COUNT(*) FROM users WHERE invited_by IS NOT NULL")
+            cursor = await db.execute("SELECT COUNT(DISTINCT tg_id) FROM share_events")
             row = await cursor.fetchone()
             return int(row[0] if row else 0)
 
-    async def count_invited_by(self, inviter_tg_id: int) -> int:
+    async def count_total_shares(self) -> int:
         async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM users WHERE invited_by = ?",
-                (inviter_tg_id,),
-            )
+            cursor = await db.execute("SELECT COUNT(*) FROM share_events")
             row = await cursor.fetchone()
             return int(row[0] if row else 0)
 
-    async def get_top_referrers(self, limit: int = 10) -> list[tuple[int, int]]:
+    async def count_shares_last_hours(self, hours: int = 24) -> int:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
-                SELECT invited_by, COUNT(*) as invited_count
-                FROM users
-                WHERE invited_by IS NOT NULL
-                GROUP BY invited_by
-                ORDER BY invited_count DESC, invited_by ASC
+                SELECT COUNT(*)
+                FROM share_events
+                WHERE created_at >= datetime('now', ?)
+                """,
+                (f"-{int(hours)} hours",),
+            )
+            row = await cursor.fetchone()
+            return int(row[0] if row else 0)
+
+    async def get_top_sharers_last_hours(
+        self,
+        hours: int = 24,
+        limit: int = 5,
+    ) -> list[dict[str, str | int | None]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT
+                    s.tg_id,
+                    u.username,
+                    u.full_name,
+                    COUNT(*) AS share_count
+                FROM share_events s
+                LEFT JOIN users u ON u.tg_id = s.tg_id
+                WHERE s.created_at >= datetime('now', ?)
+                GROUP BY s.tg_id, u.username, u.full_name
+                ORDER BY share_count DESC, s.tg_id ASC
                 LIMIT ?
                 """,
-                (int(limit),),
+                (f"-{int(hours)} hours", int(limit)),
             )
             rows = await cursor.fetchall()
-            return [(int(row[0]), int(row[1])) for row in rows]
+
+        result: list[dict[str, str | int | None]] = []
+        for row in rows:
+            result.append(
+                {
+                    "tg_id": int(row[0]),
+                    "username": row[1],
+                    "full_name": row[2],
+                    "share_count": int(row[3]),
+                }
+            )
+        return result
 
     async def get_recent_users(self, limit: int = 15) -> list[dict[str, str | int | None]]:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
-                SELECT tg_id, username, full_name, first_seen, last_seen, invited_by
+                SELECT tg_id, username, full_name, first_seen, last_seen
                 FROM users
                 ORDER BY last_seen DESC
                 LIMIT ?
@@ -161,8 +229,9 @@ class Storage:
                     "full_name": row[2],
                     "first_seen": row[3],
                     "last_seen": row[4],
-                    "invited_by": int(row[5]) if row[5] is not None else None,
                     "is_blocked": 0,
+                    "is_proxy_connected": 0,
+                    "proxy_connected_at": None,
                 }
             )
         return result
@@ -175,7 +244,7 @@ class Storage:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
-                SELECT tg_id, username, full_name, first_seen, last_seen, invited_by, is_blocked
+                SELECT tg_id, username, full_name, first_seen, last_seen, is_blocked, is_proxy_connected, proxy_connected_at
                 FROM users
                 ORDER BY last_seen DESC
                 LIMIT ? OFFSET ?
@@ -193,8 +262,9 @@ class Storage:
                     "full_name": row[2],
                     "first_seen": row[3],
                     "last_seen": row[4],
-                    "invited_by": int(row[5]) if row[5] is not None else None,
-                    "is_blocked": bool(row[6]),
+                    "is_blocked": bool(row[5]),
+                    "is_proxy_connected": bool(row[6]),
+                    "proxy_connected_at": row[7],
                 }
             )
         return result
@@ -203,7 +273,7 @@ class Storage:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
-                SELECT tg_id, username, full_name, first_seen, last_seen, invited_by, is_blocked
+                SELECT tg_id, username, full_name, first_seen, last_seen, is_blocked, is_proxy_connected, proxy_connected_at
                 FROM users
                 WHERE tg_id = ?
                 LIMIT 1
@@ -221,8 +291,9 @@ class Storage:
             "full_name": row[2],
             "first_seen": row[3],
             "last_seen": row[4],
-            "invited_by": int(row[5]) if row[5] is not None else None,
-            "is_blocked": bool(row[6]),
+            "is_blocked": bool(row[5]),
+            "is_proxy_connected": bool(row[6]),
+            "proxy_connected_at": row[7],
         }
 
     async def search_users(self, query: str, limit: int = 10) -> list[dict[str, str | int | None]]:
@@ -234,7 +305,7 @@ class Storage:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
-                SELECT tg_id, username, full_name, first_seen, last_seen, invited_by, is_blocked
+                SELECT tg_id, username, full_name, first_seen, last_seen, is_blocked, is_proxy_connected, proxy_connected_at
                 FROM users
                 WHERE CAST(tg_id AS TEXT) LIKE ?
                    OR LOWER(COALESCE(username, '')) LIKE ?
@@ -255,37 +326,9 @@ class Storage:
                     "full_name": row[2],
                     "first_seen": row[3],
                     "last_seen": row[4],
-                    "invited_by": int(row[5]) if row[5] is not None else None,
-                    "is_blocked": bool(row[6]),
-                }
-            )
-        return result
-
-    async def get_referred_users(self, inviter_tg_id: int, limit: int = 20) -> list[dict[str, str | int | None]]:
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                """
-                SELECT tg_id, username, full_name, first_seen, last_seen, invited_by, is_blocked
-                FROM users
-                WHERE invited_by = ?
-                ORDER BY last_seen DESC
-                LIMIT ?
-                """,
-                (int(inviter_tg_id), int(limit)),
-            )
-            rows = await cursor.fetchall()
-
-        result: list[dict[str, str | int | None]] = []
-        for row in rows:
-            result.append(
-                {
-                    "tg_id": int(row[0]),
-                    "username": row[1],
-                    "full_name": row[2],
-                    "first_seen": row[3],
-                    "last_seen": row[4],
-                    "invited_by": int(row[5]) if row[5] is not None else None,
-                    "is_blocked": bool(row[6]),
+                    "is_blocked": bool(row[5]),
+                    "is_proxy_connected": bool(row[6]),
+                    "proxy_connected_at": row[7],
                 }
             )
         return result
