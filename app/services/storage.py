@@ -27,7 +27,8 @@ class Storage:
                     last_seen TEXT NOT NULL,
                     invited_by INTEGER,
                     username TEXT,
-                    full_name TEXT
+                    full_name TEXT,
+                    is_blocked INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -48,6 +49,8 @@ class Storage:
             await db.execute("ALTER TABLE users ADD COLUMN username TEXT")
         if "full_name" not in existing:
             await db.execute("ALTER TABLE users ADD COLUMN full_name TEXT")
+        if "is_blocked" not in existing:
+            await db.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0")
 
     async def touch_user(
         self,
@@ -159,6 +162,7 @@ class Storage:
                     "first_seen": row[3],
                     "last_seen": row[4],
                     "invited_by": int(row[5]) if row[5] is not None else None,
+                    "is_blocked": 0,
                 }
             )
         return result
@@ -171,7 +175,7 @@ class Storage:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
-                SELECT tg_id, username, full_name, first_seen, last_seen, invited_by
+                SELECT tg_id, username, full_name, first_seen, last_seen, invited_by, is_blocked
                 FROM users
                 ORDER BY last_seen DESC
                 LIMIT ? OFFSET ?
@@ -190,6 +194,7 @@ class Storage:
                     "first_seen": row[3],
                     "last_seen": row[4],
                     "invited_by": int(row[5]) if row[5] is not None else None,
+                    "is_blocked": bool(row[6]),
                 }
             )
         return result
@@ -198,7 +203,7 @@ class Storage:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
-                SELECT tg_id, username, full_name, first_seen, last_seen, invited_by
+                SELECT tg_id, username, full_name, first_seen, last_seen, invited_by, is_blocked
                 FROM users
                 WHERE tg_id = ?
                 LIMIT 1
@@ -217,6 +222,7 @@ class Storage:
             "first_seen": row[3],
             "last_seen": row[4],
             "invited_by": int(row[5]) if row[5] is not None else None,
+            "is_blocked": bool(row[6]),
         }
 
     async def search_users(self, query: str, limit: int = 10) -> list[dict[str, str | int | None]]:
@@ -228,7 +234,7 @@ class Storage:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
-                SELECT tg_id, username, full_name, first_seen, last_seen, invited_by
+                SELECT tg_id, username, full_name, first_seen, last_seen, invited_by, is_blocked
                 FROM users
                 WHERE CAST(tg_id AS TEXT) LIKE ?
                    OR LOWER(COALESCE(username, '')) LIKE ?
@@ -250,9 +256,54 @@ class Storage:
                     "first_seen": row[3],
                     "last_seen": row[4],
                     "invited_by": int(row[5]) if row[5] is not None else None,
+                    "is_blocked": bool(row[6]),
                 }
             )
         return result
+
+    async def get_referred_users(self, inviter_tg_id: int, limit: int = 20) -> list[dict[str, str | int | None]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT tg_id, username, full_name, first_seen, last_seen, invited_by, is_blocked
+                FROM users
+                WHERE invited_by = ?
+                ORDER BY last_seen DESC
+                LIMIT ?
+                """,
+                (int(inviter_tg_id), int(limit)),
+            )
+            rows = await cursor.fetchall()
+
+        result: list[dict[str, str | int | None]] = []
+        for row in rows:
+            result.append(
+                {
+                    "tg_id": int(row[0]),
+                    "username": row[1],
+                    "full_name": row[2],
+                    "first_seen": row[3],
+                    "last_seen": row[4],
+                    "invited_by": int(row[5]) if row[5] is not None else None,
+                    "is_blocked": bool(row[6]),
+                }
+            )
+        return result
+
+    async def set_user_blocked(self, tg_id: int, blocked: bool) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "UPDATE users SET is_blocked = ? WHERE tg_id = ?",
+                (1 if blocked else 0, int(tg_id)),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def delete_user_by_tg_id(self, tg_id: int) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("DELETE FROM users WHERE tg_id = ?", (int(tg_id),))
+            await db.commit()
+            return cursor.rowcount > 0
 
     async def get_all_user_ids(self) -> list[int]:
         async with aiosqlite.connect(self.db_path) as db:

@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command, StateFilter
@@ -35,6 +37,30 @@ class UserWriteForm(StatesGroup):
 
 def _is_admin(user_id: int, admin_ids: set[int]) -> bool:
     return user_id in admin_ids
+
+
+def _humanize_last_seen(last_seen: str) -> str:
+    try:
+        dt = datetime.strptime(last_seen, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return "неизвестно"
+
+    sec = int((datetime.now(timezone.utc) - dt).total_seconds())
+    if sec < 60:
+        return "только что"
+    if sec < 3600:
+        return f"{sec // 60} м. назад"
+    if sec < 86400:
+        return f"{sec // 3600} ч. назад"
+    return f"{sec // 86400} дн. назад"
+
+
+def _days_since(first_seen: str) -> int:
+    try:
+        dt = datetime.strptime(first_seen, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return 0
+    return max(0, (datetime.now(timezone.utc) - dt).days)
 
 
 def build_admin_menu() -> InlineKeyboardMarkup:
@@ -82,11 +108,17 @@ def build_users_keyboard(
     for user in users:
         tg_id = int(user["tg_id"])
         username = user["username"]
+        full_name = (user.get("full_name") or "").strip()
+        blocked = bool(user.get("is_blocked"))
+        status_icon = "⛔" if blocked else "✅"
         if username:
-            label = f"👤 @{username} ({tg_id})"
+            user_text = f"@{username}"
+        elif full_name:
+            user_text = full_name
         else:
-            label = f"👤 {tg_id}"
-        rows.append([InlineKeyboardButton(text=label, callback_data=f"admin:user:{tg_id}:{page}")])
+            user_text = str(tg_id)
+        label = f"{status_icon} {user_text} | {_humanize_last_seen(str(user['last_seen']))}"
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"admin:user:{tg_id}:{page}:l")])
 
     nav_row: list[InlineKeyboardButton] = []
     if page > 1:
@@ -95,15 +127,24 @@ def build_users_keyboard(
     if page < total_pages:
         nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"admin:users:{page + 1}"))
     rows.append(nav_row)
-    rows.append([InlineKeyboardButton(text="🔎 Поиск", callback_data="admin:users_search")])
+    rows.append(
+        [
+            InlineKeyboardButton(text="🔎 Поиск", callback_data="admin:users_search"),
+            InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats"),
+        ]
+    )
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_user_profile_keyboard(back_callback: str, tg_id: int, page: int) -> InlineKeyboardMarkup:
+def build_user_profile_keyboard(tg_id: int, page: int, source: str) -> InlineKeyboardMarkup:
+    back_callback = "admin:users_search" if source == "s" else f"admin:users:{page}"
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="✉️ Написать", callback_data=f"admin:user_write:{tg_id}:{page}")],
+            [InlineKeyboardButton(text="✉️ Отправить сообщение", callback_data=f"admin:uw:{tg_id}:{page}:{source}")],
+            [InlineKeyboardButton(text="🤝 Рефералы", callback_data=f"admin:ur:{tg_id}:{page}:{source}")],
+            [InlineKeyboardButton(text="⚠️ Ограничить / Разблокировать", callback_data=f"admin:ub:{tg_id}:{page}:{source}")],
+            [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"admin:ud:{tg_id}:{page}:{source}")],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)],
             [InlineKeyboardButton(text="🏠 В меню", callback_data="admin:menu")],
         ]
@@ -119,7 +160,7 @@ def build_user_search_results_keyboard(users: list[dict[str, str | int | None]])
             label = f"👤 @{username} ({tg_id})"
         else:
             label = f"👤 {tg_id}"
-        rows.append([InlineKeyboardButton(text=label, callback_data=f"admin:usersearch:{tg_id}")])
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"admin:user:{tg_id}:1:s")])
     rows.append([InlineKeyboardButton(text="🔎 Новый поиск", callback_data="admin:users_search")])
     rows.append([InlineKeyboardButton(text="👥 К списку пользователей", callback_data="admin:users:1")])
     rows.append([InlineKeyboardButton(text="🏠 В меню", callback_data="admin:menu")])
@@ -391,11 +432,9 @@ async def cb_admin_actions(
         users = await storage.get_users_page(page=page, page_size=USERS_PAGE_SIZE)
         referred_users = await storage.count_users_with_referrer()
         text = (
-            "Пользователи\n"
-            f"- всего: {total_users}\n"
-            f"- по приглашению: {referred_users}\n\n"
-            f"Страница {page} из {total_pages}\n"
-            "Нажмите на пользователя, чтобы открыть профиль."
+            f"👥 Список пользователей (стр. {page}/{total_pages})\n\n"
+            f"Всего: {total_users} | По приглашению: {referred_users}\n"
+            "Нажмите на пользователя для управления:"
         )
         keyboard = build_users_keyboard(users=users, page=page, total_pages=total_pages)
         await callback.message.edit_text(text, reply_markup=keyboard)
@@ -415,44 +454,9 @@ async def cb_admin_actions(
         await callback.answer()
         return
 
-    if action[1] == "usersearch":
-        await state.clear()
-        if len(action) < 3 or not action[2].isdigit():
-            await callback.answer("Некорректные данные", show_alert=True)
-            return
-
-        tg_id = int(action[2])
-        user_data = await storage.get_user_by_tg_id(tg_id)
-        if user_data is None:
-            await callback.answer("Пользователь не найден", show_alert=True)
-            return
-
-        invited_count = await storage.count_invited_by(tg_id)
-        username = user_data["username"]
-        username_text = f"@{username}" if username else "-"
-        full_name = user_data["full_name"] or "-"
-        invited_by = user_data["invited_by"]
-        invited_by_text = str(invited_by) if invited_by is not None else "-"
-        text = (
-            "Профиль пользователя\n"
-            f"- tg_id: {user_data['tg_id']}\n"
-            f"- username: {username_text}\n"
-            f"- имя: {full_name}\n"
-            f"- invited_by: {invited_by_text}\n"
-            f"- пригласил: {invited_count}\n"
-            f"- first_seen: {user_data['first_seen']}\n"
-            f"- last_seen: {user_data['last_seen']}"
-        )
-        await callback.message.edit_text(
-            text,
-            reply_markup=build_user_profile_keyboard("admin:users_search", tg_id, 1),
-        )
-        await callback.answer()
-        return
-
     if action[1] == "user":
         await state.clear()
-        if len(action) < 4:
+        if len(action) < 5:
             await callback.answer("Некорректные данные", show_alert=True)
             return
 
@@ -462,6 +466,7 @@ async def cb_admin_actions(
 
         tg_id = int(action[2])
         page = max(1, int(action[3]))
+        source = action[4] if action[4] in {"l", "s"} else "l"
         user_data = await storage.get_user_by_tg_id(tg_id)
         if user_data is None:
             await callback.answer("Пользователь не найден", show_alert=True)
@@ -473,30 +478,32 @@ async def cb_admin_actions(
         full_name = user_data["full_name"] or "-"
         invited_by = user_data["invited_by"]
         invited_by_text = str(invited_by) if invited_by is not None else "-"
+        blocked = bool(user_data.get("is_blocked"))
+        status_text = "⛔ Ограничен" if blocked else "✅ Активен"
         text = (
             "Профиль пользователя\n"
+            f"- статус: {status_text}\n"
             f"- tg_id: {user_data['tg_id']}\n"
             f"- username: {username_text}\n"
             f"- имя: {full_name}\n"
             f"- invited_by: {invited_by_text}\n"
             f"- пригласил: {invited_count}\n"
             f"- first_seen: {user_data['first_seen']}\n"
-            f"- last_seen: {user_data['last_seen']}"
+            f"- last_seen: {_humanize_last_seen(str(user_data['last_seen']))}\n"
+            f"- дней в боте: {_days_since(str(user_data['first_seen']))}"
         )
-        await callback.message.edit_text(
-            text,
-            reply_markup=build_user_profile_keyboard(f"admin:users:{page}", tg_id, page),
-        )
+        await callback.message.edit_text(text, reply_markup=build_user_profile_keyboard(tg_id, page, source))
         await callback.answer()
         return
 
-    if action[1] == "user_write":
-        if len(action) < 4 or not action[2].isdigit() or not action[3].isdigit():
+    if action[1] == "uw":
+        if len(action) < 5 or not action[2].isdigit() or not action[3].isdigit():
             await callback.answer("Некорректные данные", show_alert=True)
             return
 
         tg_id = int(action[2])
         page = int(action[3])
+        source = action[4] if action[4] in {"l", "s"} else "l"
         user_data = await storage.get_user_by_tg_id(tg_id)
         if user_data is None:
             await callback.answer("Пользователь не найден", show_alert=True)
@@ -505,14 +512,128 @@ async def cb_admin_actions(
         await state.clear()
         await state.set_state(UserWriteForm.text)
         await _save_panel_ref(state, callback)
-        await state.update_data(write_target_tg_id=tg_id, write_back_page=page)
+        await state.update_data(write_target_tg_id=tg_id, write_back_page=page, write_source=source)
         await callback.message.edit_text(
             "Сообщение пользователю\n\n"
             f"Получатель: {tg_id}\n"
             "Отправьте текст одним сообщением.",
-            reply_markup=build_wizard_keyboard(f"admin:user:{tg_id}:{page}"),
+            reply_markup=build_wizard_keyboard(f"admin:user:{tg_id}:{page}:{source}"),
         )
         await callback.answer()
+        return
+
+    if action[1] == "ur":
+        if len(action) < 5 or not action[2].isdigit() or not action[3].isdigit():
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+
+        tg_id = int(action[2])
+        page = int(action[3])
+        source = action[4] if action[4] in {"l", "s"} else "l"
+        refs = await storage.get_referred_users(tg_id, limit=20)
+        invited_count = await storage.count_invited_by(tg_id)
+        lines = [f"Рефералы пользователя {tg_id}", f"Всего приглашено: {invited_count}", ""]
+        if not refs:
+            lines.append("Список пуст")
+        else:
+            for user in refs:
+                uname = user["username"]
+                title = f"@{uname}" if uname else str(user["tg_id"])
+                lines.append(f"- {title} | {_humanize_last_seen(str(user['last_seen']))}")
+        await callback.message.edit_text(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ К профилю", callback_data=f"admin:user:{tg_id}:{page}:{source}")],
+                    [InlineKeyboardButton(text="🏠 В меню", callback_data="admin:menu")],
+                ]
+            ),
+        )
+        await callback.answer()
+        return
+
+    if action[1] == "ub":
+        if len(action) < 5 or not action[2].isdigit() or not action[3].isdigit():
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+
+        tg_id = int(action[2])
+        page = int(action[3])
+        source = action[4] if action[4] in {"l", "s"} else "l"
+        user_data = await storage.get_user_by_tg_id(tg_id)
+        if user_data is None:
+            await callback.answer("Пользователь не найден", show_alert=True)
+            return
+
+        new_blocked = not bool(user_data.get("is_blocked"))
+        await storage.set_user_blocked(tg_id, new_blocked)
+        updated = await storage.get_user_by_tg_id(tg_id)
+        if updated is None:
+            await callback.answer("Пользователь не найден", show_alert=True)
+            return
+
+        invited_count = await storage.count_invited_by(tg_id)
+        username = updated["username"]
+        username_text = f"@{username}" if username else "-"
+        full_name = updated["full_name"] or "-"
+        invited_by = updated["invited_by"]
+        invited_by_text = str(invited_by) if invited_by is not None else "-"
+        status_text = "⛔ Ограничен" if bool(updated.get("is_blocked")) else "✅ Активен"
+        text = (
+            "Профиль пользователя\n"
+            f"- статус: {status_text}\n"
+            f"- tg_id: {updated['tg_id']}\n"
+            f"- username: {username_text}\n"
+            f"- имя: {full_name}\n"
+            f"- invited_by: {invited_by_text}\n"
+            f"- пригласил: {invited_count}\n"
+            f"- first_seen: {updated['first_seen']}\n"
+            f"- last_seen: {_humanize_last_seen(str(updated['last_seen']))}\n"
+            f"- дней в боте: {_days_since(str(updated['first_seen']))}"
+        )
+        await callback.message.edit_text(text, reply_markup=build_user_profile_keyboard(tg_id, page, source))
+        await callback.answer("Ограничение обновлено")
+        return
+
+    if action[1] == "ud":
+        if len(action) < 5 or not action[2].isdigit() or not action[3].isdigit():
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+
+        tg_id = int(action[2])
+        page = int(action[3])
+        source = action[4] if action[4] in {"l", "s"} else "l"
+        deleted = await storage.delete_user_by_tg_id(tg_id)
+        if not deleted:
+            await callback.answer("Пользователь не найден", show_alert=True)
+            return
+        if source == "s":
+            await callback.message.edit_text(
+                f"Пользователь {tg_id} удален.",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text="🔎 Новый поиск", callback_data="admin:users_search")],
+                        [InlineKeyboardButton(text="👥 К списку", callback_data="admin:users:1")],
+                    ]
+                ),
+            )
+            await callback.answer("Удалено")
+            return
+
+        total_users = await storage.count_users()
+        total_pages = max(1, (total_users + USERS_PAGE_SIZE - 1) // USERS_PAGE_SIZE)
+        if page > total_pages:
+            page = total_pages
+        users = await storage.get_users_page(page=page, page_size=USERS_PAGE_SIZE)
+        referred_users = await storage.count_users_with_referrer()
+        text = (
+            f"👥 Список пользователей (стр. {page}/{total_pages})\n\n"
+            f"Всего: {total_users} | По приглашению: {referred_users}\n"
+            "Нажмите на пользователя для управления:"
+        )
+        keyboard = build_users_keyboard(users=users, page=page, total_pages=total_pages)
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.answer("Удалено")
         return
 
     await callback.answer()
@@ -605,6 +726,7 @@ async def user_write_message(
     data = await state.get_data()
     target_tg_id = int(data.get("write_target_tg_id", 0))
     page = int(data.get("write_back_page", 1))
+    source = str(data.get("write_source", "l"))
     if not target_tg_id:
         await state.clear()
         await message.answer("Не удалось определить получателя.", reply_markup=build_admin_menu())
@@ -615,7 +737,7 @@ async def user_write_message(
             bot,
             state,
             "Сообщение пользователю\n\nТекст пустой. Отправьте текст одним сообщением.",
-            build_wizard_keyboard(f"admin:user:{target_tg_id}:{page}"),
+            build_wizard_keyboard(f"admin:user:{target_tg_id}:{page}:{source}"),
         )
         return
 
@@ -652,14 +774,15 @@ async def user_write_message(
         f"- invited_by: {invited_by_text}\n"
         f"- пригласил: {invited_count}\n"
         f"- first_seen: {user_data['first_seen']}\n"
-        f"- last_seen: {user_data['last_seen']}\n\n"
+        f"- last_seen: {_humanize_last_seen(str(user_data['last_seen']))}\n"
+        f"- дней в боте: {_days_since(str(user_data['first_seen']))}\n\n"
         f"{result_text}"
     )
     await _edit_panel(
         bot,
         state,
         profile_text,
-        build_user_profile_keyboard(f"admin:users:{page}", target_tg_id, page),
+        build_user_profile_keyboard(target_tg_id, page, source),
     )
     await state.clear()
 

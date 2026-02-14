@@ -13,19 +13,25 @@ router = Router()
 async def cmd_help(
     message: Message,
     support_username: str,
+    tribute_url: str | None,
+    channel_url: str | None,
 ) -> None:
     text = (
-        "<b>Это полностью бесплатный MTProto прокси для Telegram.</b>\n"
+        "Это полностью бесплатный прокси для Telegram.\n"
         "Он помогает подключаться только к Telegram, это не VPN и не влияет на другие приложения.\n"
-        "<b>Поделиться прокси:</b> /share\n"
+        "Чтобы быстро поделиться прокси с другом, используйте /share.\n"
         "Чтобы пригласить друзей по своей ссылке: /invite.\n"
         "Если хотите поддержать проект, используйте /donate.\n"
-        f"<b>Поддержка:</b> https://t.me/{support_username}"
+        f"Поддержка: https://t.me/{support_username}"
     )
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="💬 Поддержка", callback_data="support_click")],
         [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="user:home")],
     ]
+    if channel_url:
+        rows.append([InlineKeyboardButton(text="📣 Подписаться на канал", url=channel_url)])
+    if tribute_url:
+        rows.append([InlineKeyboardButton(text="❤️ Донат", url=tribute_url)])
     keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
     await message.answer(text, reply_markup=keyboard)
 
