@@ -39,22 +39,6 @@ def _is_admin(user_id: int, admin_ids: set[int]) -> bool:
     return user_id in admin_ids
 
 
-def _humanize_last_seen(last_seen: str) -> str:
-    try:
-        dt = datetime.strptime(last_seen, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-    except ValueError:
-        return "неизвестно"
-
-    sec = int((datetime.now(timezone.utc) - dt).total_seconds())
-    if sec < 60:
-        return "только что"
-    if sec < 3600:
-        return f"{sec // 60} м. назад"
-    if sec < 86400:
-        return f"{sec // 3600} ч. назад"
-    return f"{sec // 86400} дн. назад"
-
-
 def _days_since(first_seen: str) -> int:
     try:
         dt = datetime.strptime(first_seen, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
@@ -78,11 +62,7 @@ def build_admin_menu() -> InlineKeyboardMarkup:
 
 def build_admin_dashboard_text(
     total_users: int,
-    active_users: int,
     new_users: int,
-    unique_sharers: int,
-    shares_24h: int,
-    total_shares: int,
     total_proxies: int,
     enabled_proxies: int,
 ) -> str:
@@ -90,11 +70,8 @@ def build_admin_dashboard_text(
         "<b>Панель администратора</b>\n\n"
         "<b>Пользователи</b>\n"
         f"• Всего: <b>{total_users}</b>\n"
-        f"• Активные за 24ч: <b>{active_users}</b>\n"
         f"• Новые за 24ч: <b>{new_users}</b>\n"
-        f"• Поделились ботом: <b>{unique_sharers}</b>\n"
-        f"• Share-действий за 24ч: <b>{shares_24h}</b>\n"
-        f"• Всего share-действий: <b>{total_shares}</b>\n\n"
+        "\n"
         "<b>Прокси</b>\n"
         f"• Всего: <b>{total_proxies}</b>\n"
         f"• Включено: <b>{enabled_proxies}</b>\n\n"
@@ -137,16 +114,14 @@ def build_users_keyboard(
         username = user["username"]
         full_name = (user.get("full_name") or "").strip()
         blocked = bool(user.get("is_blocked"))
-        connected = bool(user.get("is_proxy_connected"))
         status_icon = "⛔" if blocked else "✅"
-        proxy_icon = "🟢" if connected else "⚪"
         if username:
             user_text = f"@{username}"
         elif full_name:
             user_text = full_name
         else:
             user_text = str(tg_id)
-        label = f"{status_icon}{proxy_icon} {user_text} | {_humanize_last_seen(str(user['last_seen']))}"
+        label = f"{status_icon} {user_text} | зашел: {str(user['first_seen'])[:16]}"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"admin:user:{tg_id}:{page}:l")])
 
     nav_row: list[InlineKeyboardButton] = []
@@ -193,26 +168,6 @@ def build_user_search_results_keyboard(users: list[dict[str, str | int | None]])
     rows.append([InlineKeyboardButton(text="👥 К списку пользователей", callback_data="admin:users:1")])
     rows.append([InlineKeyboardButton(text="🏠 В меню", callback_data="admin:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def _format_top_sharers(top_sharers: list[dict[str, str | int | None]]) -> str:
-    if not top_sharers:
-        return "• Пока нет данных"
-
-    lines: list[str] = []
-    for idx, item in enumerate(top_sharers, start=1):
-        tg_id = int(item["tg_id"])
-        username = item["username"]
-        full_name = (item.get("full_name") or "").strip()
-        share_count = int(item["share_count"])
-        if username:
-            label = f"@{username}"
-        elif full_name:
-            label = full_name
-        else:
-            label = str(tg_id)
-        lines.append(f"{idx}. {label} ({tg_id}) - <b>{share_count}</b>")
-    return "\n".join(lines)
 
 
 def _add_step_text(step: str, data: dict) -> str:
@@ -292,20 +247,12 @@ async def cmd_admin(
 
     await state.clear()
     total_users = await storage.count_users()
-    active_users = await storage.count_active_users_last_hours(24)
     new_users = await storage.count_new_users_last_hours(24)
-    unique_sharers = await storage.count_unique_sharers()
-    shares_24h = await storage.count_shares_last_hours(24)
-    total_shares = await storage.count_total_shares()
     proxies = proxy_store.load_all()
     enabled_proxies = len([proxy for proxy in proxies if proxy.enabled])
     text = build_admin_dashboard_text(
         total_users=total_users,
-        active_users=active_users,
         new_users=new_users,
-        unique_sharers=unique_sharers,
-        shares_24h=shares_24h,
-        total_shares=total_shares,
         total_proxies=len(proxies),
         enabled_proxies=enabled_proxies,
     )
@@ -329,20 +276,12 @@ async def cb_admin_actions(
     if action[1] == "menu":
         await state.clear()
         total_users = await storage.count_users()
-        active_users = await storage.count_active_users_last_hours(24)
         new_users = await storage.count_new_users_last_hours(24)
-        unique_sharers = await storage.count_unique_sharers()
-        shares_24h = await storage.count_shares_last_hours(24)
-        total_shares = await storage.count_total_shares()
         proxies = proxy_store.load_all()
         enabled_proxies = len([proxy for proxy in proxies if proxy.enabled])
         text = build_admin_dashboard_text(
             total_users=total_users,
-            active_users=active_users,
             new_users=new_users,
-            unique_sharers=unique_sharers,
-            shares_24h=shares_24h,
-            total_shares=total_shares,
             total_proxies=len(proxies),
             enabled_proxies=enabled_proxies,
         )
@@ -486,12 +425,7 @@ async def cb_admin_actions(
     if action[1] == "stats":
         await state.clear()
         total_users = await storage.count_users()
-        active_users = await storage.count_active_users_last_hours(24)
         new_users = await storage.count_new_users_last_hours(24)
-        unique_sharers = await storage.count_unique_sharers()
-        shares_24h = await storage.count_shares_last_hours(24)
-        total_shares = await storage.count_total_shares()
-        top_sharers = await storage.get_top_sharers_last_hours(hours=24, limit=5)
         proxies = proxy_store.load_all()
         enabled_proxies = len([proxy for proxy in proxies if proxy.enabled])
 
@@ -499,16 +433,11 @@ async def cb_admin_actions(
             "<b>Статистика бота</b>\n\n"
             "<b>Пользователи</b>\n"
             f"• Всего: <b>{total_users}</b>\n"
-            f"• Активные за 24ч: <b>{active_users}</b>\n"
             f"• Новые за 24ч: <b>{new_users}</b>\n"
-            f"• Поделились ботом: <b>{unique_sharers}</b>\n"
-            f"• Share-действий за 24ч: <b>{shares_24h}</b>\n"
-            f"• Всего share-действий: <b>{total_shares}</b>\n\n"
+            "\n"
             "<b>Прокси</b>\n"
             f"• Всего: <b>{len(proxies)}</b>\n"
-            f"• Включено: <b>{enabled_proxies}</b>\n\n"
-            "<b>Топ-5 по шерам за 24ч</b>\n"
-            f"{_format_top_sharers(top_sharers)}"
+            f"• Включено: <b>{enabled_proxies}</b>"
         )
         back = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:menu")]]
@@ -533,11 +462,10 @@ async def cb_admin_actions(
             page = total_pages
 
         users = await storage.get_users_page(page=page, page_size=USERS_PAGE_SIZE)
-        unique_sharers = await storage.count_unique_sharers()
         text = (
             f"👥 Список пользователей (стр. {page}/{total_pages})\n\n"
-            f"Всего: {total_users} | Поделились ботом: {unique_sharers}\n"
-            "Иконки: ✅/⛔ статус, 🟢/⚪ proxy\n"
+            f"Всего: {total_users}\n"
+            "Иконки: ✅/⛔ статус\n"
             "Нажмите на пользователя для управления:"
         )
         keyboard = build_users_keyboard(users=users, page=page, total_pages=total_pages)
@@ -581,17 +509,13 @@ async def cb_admin_actions(
         full_name = user_data["full_name"] or "-"
         blocked = bool(user_data.get("is_blocked"))
         status_text = "⛔ Ограничен" if blocked else "✅ Активен"
-        proxy_connected = bool(user_data.get("is_proxy_connected"))
-        proxy_status = "🟢 Подключил" if proxy_connected else "⚪ Не подключил"
         text = (
             "Профиль пользователя\n"
             f"- статус: {status_text}\n"
-            f"- proxy: {proxy_status}\n"
             f"- tg_id: {user_data['tg_id']}\n"
             f"- username: {username_text}\n"
             f"- имя: {full_name}\n"
             f"- first_seen: {user_data['first_seen']}\n"
-            f"- last_seen: {_humanize_last_seen(str(user_data['last_seen']))}\n"
             f"- дней в боте: {_days_since(str(user_data['first_seen']))}"
         )
         await callback.message.edit_text(text, reply_markup=build_user_profile_keyboard(tg_id, page, source))
@@ -648,17 +572,13 @@ async def cb_admin_actions(
         username_text = f"@{username}" if username else "-"
         full_name = updated["full_name"] or "-"
         status_text = "⛔ Ограничен" if bool(updated.get("is_blocked")) else "✅ Активен"
-        proxy_connected = bool(updated.get("is_proxy_connected"))
-        proxy_status = "🟢 Подключил" if proxy_connected else "⚪ Не подключил"
         text = (
             "Профиль пользователя\n"
             f"- статус: {status_text}\n"
-            f"- proxy: {proxy_status}\n"
             f"- tg_id: {updated['tg_id']}\n"
             f"- username: {username_text}\n"
             f"- имя: {full_name}\n"
             f"- first_seen: {updated['first_seen']}\n"
-            f"- last_seen: {_humanize_last_seen(str(updated['last_seen']))}\n"
             f"- дней в боте: {_days_since(str(updated['first_seen']))}"
         )
         await callback.message.edit_text(text, reply_markup=build_user_profile_keyboard(tg_id, page, source))
@@ -695,11 +615,10 @@ async def cb_admin_actions(
         if page > total_pages:
             page = total_pages
         users = await storage.get_users_page(page=page, page_size=USERS_PAGE_SIZE)
-        unique_sharers = await storage.count_unique_sharers()
         text = (
             f"👥 Список пользователей (стр. {page}/{total_pages})\n\n"
-            f"Всего: {total_users} | Поделились ботом: {unique_sharers}\n"
-            "Иконки: ✅/⛔ статус, 🟢/⚪ proxy\n"
+            f"Всего: {total_users}\n"
+            "Иконки: ✅/⛔ статус\n"
             "Нажмите на пользователя для управления:"
         )
         keyboard = build_users_keyboard(users=users, page=page, total_pages=total_pages)
@@ -834,16 +753,12 @@ async def user_write_message(
     username = user_data["username"]
     username_text = f"@{username}" if username else "-"
     full_name = user_data["full_name"] or "-"
-    proxy_connected = bool(user_data.get("is_proxy_connected"))
-    proxy_status = "🟢 Подключил" if proxy_connected else "⚪ Не подключил"
     profile_text = (
         "Профиль пользователя\n"
-        f"- proxy: {proxy_status}\n"
         f"- tg_id: {user_data['tg_id']}\n"
         f"- username: {username_text}\n"
         f"- имя: {full_name}\n"
         f"- first_seen: {user_data['first_seen']}\n"
-        f"- last_seen: {_humanize_last_seen(str(user_data['last_seen']))}\n"
         f"- дней в боте: {_days_since(str(user_data['first_seen']))}\n\n"
         f"{result_text}"
     )

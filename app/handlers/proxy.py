@@ -93,7 +93,6 @@ async def cb_copy_tg(
         username=user.username,
         full_name=user.full_name,
     )
-    await storage.set_user_proxy_connected(user.id, connected=True)
     proxy = proxies[index]
     await callback.message.answer(f"tg:// ссылка для {proxy.name}:\n{proxy.tg_link}")
     await callback.answer("Отправил tg:// ссылку")

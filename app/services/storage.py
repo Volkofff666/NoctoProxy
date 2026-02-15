@@ -80,7 +80,6 @@ class Storage:
                 VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(tg_id)
                 DO UPDATE SET
-                    last_seen = excluded.last_seen,
                     username = excluded.username,
                     full_name = excluded.full_name
                 """,
@@ -213,7 +212,7 @@ class Storage:
                 """
                 SELECT tg_id, username, full_name, first_seen, last_seen
                 FROM users
-                ORDER BY last_seen DESC
+                ORDER BY first_seen DESC
                 LIMIT ?
                 """,
                 (int(limit),),
@@ -246,7 +245,7 @@ class Storage:
                 """
                 SELECT tg_id, username, full_name, first_seen, last_seen, is_blocked, is_proxy_connected, proxy_connected_at
                 FROM users
-                ORDER BY last_seen DESC
+                ORDER BY first_seen DESC
                 LIMIT ? OFFSET ?
                 """,
                 (safe_page_size, offset),
@@ -310,7 +309,7 @@ class Storage:
                 WHERE CAST(tg_id AS TEXT) LIKE ?
                    OR LOWER(COALESCE(username, '')) LIKE ?
                    OR LOWER(COALESCE(full_name, '')) LIKE ?
-                ORDER BY last_seen DESC
+                ORDER BY first_seen DESC
                 LIMIT ?
                 """,
                 (like_value, like_value, like_value, int(limit)),
