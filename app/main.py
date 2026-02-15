@@ -39,6 +39,8 @@ async def main() -> None:
 
     bot_token = os.getenv("BOT_TOKEN")
     support_username = os.getenv("SUPPORT_USERNAME", "nocto_support")
+    vpn_promo_code = os.getenv("VPN_PROMO_CODE", "NOCTO3")
+    vpn_promo_bonus_days = int(os.getenv("VPN_PROMO_BONUS_DAYS", "3"))
     channel_url_raw = os.getenv("CHANNEL_URL", "").strip()
     channel_url = channel_url_raw if channel_url_raw else None
     tribute_url_raw = os.getenv("TRIBUTE_URL", "").strip()
@@ -76,6 +78,8 @@ async def main() -> None:
             "proxy_store": proxy_store,
             "rate_limiter": rate_limiter,
             "support_username": support_username,
+            "vpn_promo_code": vpn_promo_code,
+            "vpn_promo_bonus_days": vpn_promo_bonus_days,
             "channel_url": channel_url,
             "tribute_url": tribute_url,
             "admin_ids": admin_ids,

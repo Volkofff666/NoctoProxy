@@ -11,6 +11,7 @@ from app.services.proxy_links import ProxyItem, ProxyStore
 from app.services.storage import Storage
 
 router = Router()
+VPN_BOT_URL = "https://t.me/noctovpn_bot"
 
 
 def build_start_keyboard(
@@ -21,11 +22,13 @@ def build_start_keyboard(
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="✅ Подключить прокси", url=proxy_url)],
+        [InlineKeyboardButton(text="🚀 Попробовать VPN", url=VPN_BOT_URL)],
     ]
 
     secondary_buttons: list[InlineKeyboardButton] = [
         InlineKeyboardButton(text="📚 Все прокси", callback_data="user:proxies"),
         InlineKeyboardButton(text="📤 Поделиться", callback_data="user:share"),
+        InlineKeyboardButton(text="ℹ️ О VPN", callback_data="user:vpn_info"),
         InlineKeyboardButton(text="📌 Инструкция", callback_data="user:instruction"),
         InlineKeyboardButton(text="💬 Поддержка", url=f"https://t.me/{support_username}"),
     ]
@@ -43,6 +46,16 @@ def build_start_keyboard(
 def build_instruction_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="user:home")]]
+    )
+
+
+def build_vpn_info_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🚀 Открыть VPN-бот", url=VPN_BOT_URL)],
+            [InlineKeyboardButton(text="📋 Скопировать промокод", callback_data="user:vpn_promo")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="user:home")],
+        ]
     )
 
 
@@ -228,6 +241,59 @@ async def cb_instruction(
     )
     await _safe_edit(callback, text, reply_markup=build_instruction_keyboard())
     await callback.answer()
+
+
+@router.callback_query(F.data == "user:vpn_info")
+async def cb_vpn_info(
+    callback: CallbackQuery,
+    storage: Storage,
+    vpn_promo_code: str,
+    vpn_promo_bonus_days: int,
+) -> None:
+    user = callback.from_user
+    await storage.touch_user(
+        tg_id=user.id,
+        username=user.username,
+        full_name=user.full_name,
+    )
+
+    text = (
+        "<b>Наш VPN</b>\n\n"
+        "Быстрый и стабильный VPN для повседневного использования.\n"
+        "Подходит для видео, соцсетей, мессенджеров и обычного серфинга.\n\n"
+        "• <b>100 ₽ / месяц</b>\n"
+        "• <b>7 дней</b> пробный период\n"
+        "• Серверы до <b>10 Gbit</b>\n\n"
+        f"<b>Промокод:</b> <code>{vpn_promo_code}</code>\n"
+        f"Дает +{vpn_promo_bonus_days} дня к пробной подписке.\n\n"
+        "Нажмите кнопку ниже, чтобы попробовать."
+    )
+    await _safe_edit(callback, text, reply_markup=build_vpn_info_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "user:vpn_promo")
+async def cb_vpn_promo(
+    callback: CallbackQuery,
+    storage: Storage,
+    vpn_promo_code: str,
+    vpn_promo_bonus_days: int,
+) -> None:
+    user = callback.from_user
+    await storage.touch_user(
+        tg_id=user.id,
+        username=user.username,
+        full_name=user.full_name,
+    )
+
+    await callback.message.answer(
+        (
+            "<b>Ваш промокод для VPN:</b>\n"
+            f"<code>{vpn_promo_code}</code>\n\n"
+            f"Бонус: +{vpn_promo_bonus_days} дня к пробной подписке."
+        )
+    )
+    await callback.answer("Промокод отправлен")
 
 
 @router.callback_query(F.data == "user:proxies")
