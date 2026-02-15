@@ -47,6 +47,24 @@ def _days_since(first_seen: str) -> int:
     return max(0, (datetime.now(timezone.utc) - dt).days)
 
 
+def _humanize_first_seen(first_seen: str) -> str:
+    try:
+        dt = datetime.strptime(first_seen, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return "неизвестно"
+
+    sec = int((datetime.now(timezone.utc) - dt).total_seconds())
+    if sec < 60:
+        return "только что"
+    if sec < 3600:
+        return f"{sec // 60} м. назад"
+    if sec < 86400:
+        return f"{sec // 3600} ч. назад"
+    if sec < 172800:
+        return "вчера"
+    return f"{sec // 86400} дн. назад"
+
+
 def build_admin_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -121,7 +139,7 @@ def build_users_keyboard(
             user_text = full_name
         else:
             user_text = str(tg_id)
-        label = f"{status_icon} {user_text} | зашел: {str(user['first_seen'])[:16]}"
+        label = f"{status_icon} {user_text} | зашел: {_humanize_first_seen(str(user['first_seen']))}"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"admin:user:{tg_id}:{page}:l")])
 
     nav_row: list[InlineKeyboardButton] = []
