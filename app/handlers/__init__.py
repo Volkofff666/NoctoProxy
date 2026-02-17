@@ -3,6 +3,7 @@ from .proxy import router as proxy_router
 from .help import router as help_router
 from .admin import router as admin_router
 from .donate import router as donate_router
+from .fallback import router as fallback_router
 
 __all__ = [
     "start_router",
@@ -10,4 +11,5 @@ __all__ = [
     "help_router",
     "admin_router",
     "donate_router",
+    "fallback_router",
 ]

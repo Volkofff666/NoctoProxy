@@ -71,21 +71,27 @@ class Storage:
         tg_id: int,
         username: str | None = None,
         full_name: str | None = None,
-    ) -> None:
+    ) -> bool:
         now = utc_now_str()
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
+            cursor = await db.execute(
                 """
-                INSERT INTO users (tg_id, first_seen, last_seen, username, full_name)
+                INSERT OR IGNORE INTO users (tg_id, first_seen, last_seen, username, full_name)
                 VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(tg_id)
-                DO UPDATE SET
-                    username = excluded.username,
-                    full_name = excluded.full_name
                 """,
                 (tg_id, now, now, username, full_name),
             )
+            is_new = cursor.rowcount > 0
+            await db.execute(
+                """
+                UPDATE users
+                SET last_seen = ?, username = ?, full_name = ?
+                WHERE tg_id = ?
+                """,
+                (now, username, full_name, tg_id),
+            )
             await db.commit()
+            return is_new
 
     async def record_share(self, tg_id: int, source: str | None = None) -> None:
         now = utc_now_str()

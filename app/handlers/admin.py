@@ -1,9 +1,11 @@
 ﻿from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import datetime, timezone
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -14,6 +16,7 @@ from app.services.storage import Storage
 
 router = Router()
 USERS_PAGE_SIZE = 10
+LOGGER = logging.getLogger(__name__)
 
 
 class AddProxyForm(StatesGroup):
@@ -249,6 +252,21 @@ async def _safe_delete_message(message: Message) -> None:
         await message.delete()
     except TelegramBadRequest:
         return
+
+
+async def _send_broadcast_message(bot: Bot, tg_id: int, text: str) -> bool:
+    for _ in range(2):
+        try:
+            await bot.send_message(chat_id=tg_id, text=text, disable_web_page_preview=True)
+            return True
+        except TelegramRetryAfter as exc:
+            await asyncio.sleep(float(exc.retry_after) + 0.5)
+        except (TelegramForbiddenError, TelegramBadRequest):
+            return False
+        except Exception:
+            LOGGER.exception("Unexpected broadcast error for tg_id=%s", tg_id)
+            return False
+    return False
 
 
 @router.message(Command("admin"))
@@ -941,6 +959,7 @@ async def send_broadcast(
     admin_ids: set[int],
     storage: Storage,
     bot: Bot,
+    broadcast_workers: int,
 ) -> None:
     if not _is_admin(message.from_user.id, admin_ids):
         return
@@ -961,13 +980,30 @@ async def send_broadcast(
     user_ids = await storage.get_all_user_ids()
     success = 0
     failed = 0
+    worker_count = max(1, int(broadcast_workers))
+    queue: asyncio.Queue[int | None] = asyncio.Queue()
 
     for tg_id in user_ids:
-        try:
-            await bot.send_message(chat_id=tg_id, text=text, disable_web_page_preview=True)
-            success += 1
-        except (TelegramForbiddenError, TelegramBadRequest):
-            failed += 1
+        queue.put_nowait(int(tg_id))
+    for _ in range(worker_count):
+        queue.put_nowait(None)
+
+    lock = asyncio.Lock()
+
+    async def worker() -> None:
+        nonlocal success, failed
+        while True:
+            tg_id = await queue.get()
+            if tg_id is None:
+                return
+            ok = await _send_broadcast_message(bot, tg_id, text)
+            async with lock:
+                if ok:
+                    success += 1
+                else:
+                    failed += 1
+
+    await asyncio.gather(*(worker() for _ in range(worker_count)))
 
     data = await state.get_data()
     panel_chat_id = data.get("panel_chat_id")

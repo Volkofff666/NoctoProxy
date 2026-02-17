@@ -1,16 +1,28 @@
 ﻿services:
+  redis:
+    image: redis:7-alpine
+    container_name: tg-proxy-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+
   bot:
     build: .
     container_name: tg-proxy-bot
     restart: unless-stopped
+    depends_on:
+      - redis
     env_file:
       - .env
     environment:
       - DB_PATH=/data/bot.db
       - PROXIES_PATH=/app/config/proxies.json
+      - REDIS_URL=redis://redis:6379/0
     volumes:
       - bot_data:/data
       - ./config:/app/config
 
 volumes:
   bot_data:
+  redis_data:

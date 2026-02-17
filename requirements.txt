@@ -1,3 +1,4 @@
 ﻿aiogram
 aiosqlite
 python-dotenv
+redis

@@ -1,8 +1,11 @@
 ﻿from __future__ import annotations
 
+import asyncio
+import logging
 from urllib.parse import quote
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
+from aiogram.enums import ButtonStyle
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -12,6 +15,7 @@ from app.services.storage import Storage
 
 router = Router()
 VPN_BOT_URL = "https://t.me/noctovpn_bot"
+LOGGER = logging.getLogger(__name__)
 
 
 def build_start_keyboard(
@@ -21,7 +25,7 @@ def build_start_keyboard(
     show_admin_panel: bool,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="✅ Подключить прокси", url=proxy_url)],
+        [InlineKeyboardButton(text="Подключить прокси", url=proxy_url, style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text="🚀 Попробовать VPN", url=VPN_BOT_URL)],
     ]
 
@@ -29,8 +33,8 @@ def build_start_keyboard(
         InlineKeyboardButton(text="📚 Все прокси", callback_data="user:proxies"),
         InlineKeyboardButton(text="📤 Поделиться", callback_data="user:share"),
         InlineKeyboardButton(text="ℹ️ О VPN", callback_data="user:vpn_info"),
-        InlineKeyboardButton(text="📌 Инструкция", callback_data="user:instruction"),
-        InlineKeyboardButton(text="💬 Поддержка", url=f"https://t.me/{support_username}"),
+        InlineKeyboardButton(text="Инструкция", callback_data="user:instruction"),
+        InlineKeyboardButton(text="Поддержка", url=f"https://t.me/{support_username}"),
     ]
     if channel_url:
         secondary_buttons.append(InlineKeyboardButton(text="📣 Подписаться на канал", url=channel_url))
@@ -99,12 +103,41 @@ def build_share_actions_keyboard(tme_link: str, tg_link: str) -> InlineKeyboardM
     )
 
 
+def build_channel_reminder_keyboard(channel_url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Подписаться на канал", url=channel_url, style=ButtonStyle.SUCCESS)]
+        ]
+    )
+
+
 def _main_menu_text() -> str:
     return (
         "<b>Бесплатный Proxy для Telegram</b>\n\n"
         "Подходит только для Telegram (это <b>не VPN</b>) и не влияет на другие приложения.\n"
         "Выберите действие ниже:"
     )
+
+
+async def _send_channel_reminder(
+    bot: Bot,
+    tg_id: int,
+    channel_url: str,
+    delay_seconds: int,
+) -> None:
+    await asyncio.sleep(delay_seconds)
+    try:
+        await bot.send_message(
+            tg_id,
+            (
+                "Мы ведем <b>канал</b> с обновлениями прокси и полезными новостями проекта.\n\n"
+                "Подпишитесь, если удобно: вам несложно, а нам очень приятно ❤️"
+            ),
+            reply_markup=build_channel_reminder_keyboard(channel_url),
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        LOGGER.exception("Failed to send channel reminder to user %s", tg_id)
 
 
 async def _safe_edit(
@@ -132,9 +165,10 @@ async def cmd_start(
     support_username: str,
     channel_url: str | None,
     admin_ids: set[int],
+    channel_reminder_delay_sec: int,
 ) -> None:
     user = message.from_user
-    await storage.touch_user(
+    is_new_user = await storage.touch_user(
         tg_id=user.id,
         username=user.username,
         full_name=user.full_name,
@@ -159,6 +193,16 @@ async def cmd_start(
     )
     await message.answer(_main_menu_text(), reply_markup=keyboard)
 
+    if is_new_user and channel_url and channel_reminder_delay_sec > 0:
+        asyncio.create_task(
+            _send_channel_reminder(
+                message.bot,
+                user.id,
+                channel_url,
+                channel_reminder_delay_sec,
+            )
+        )
+
 
 @router.message(Command("invite"))
 async def cmd_invite(message: Message, storage: Storage) -> None:
@@ -180,7 +224,7 @@ async def cmd_invite(message: Message, storage: Storage) -> None:
     await message.answer(text, reply_markup=build_invite_keyboard(), disable_web_page_preview=True)
 
 
-@router.callback_query(F.data == "user:home")
+@router.callback_query(F.data.in_({"user:home", "home"}))
 async def cb_user_home(
     callback: CallbackQuery,
     proxy_store: ProxyStore,
@@ -218,7 +262,7 @@ async def cb_user_home(
     await callback.answer()
 
 
-@router.callback_query(F.data == "user:instruction")
+@router.callback_query(F.data.in_({"user:instruction", "instruction"}))
 async def cb_instruction(
     callback: CallbackQuery,
     storage: Storage,
