@@ -72,6 +72,16 @@ def _humanize_first_seen(first_seen: str) -> str:
     return f"{sec // 86400} дн. назад"
 
 
+def _growth_percent(current: int, previous: int) -> str:
+    if previous <= 0:
+        if current <= 0:
+            return "0%"
+        return "+100%"
+    delta = ((current - previous) / previous) * 100
+    sign = "+" if delta >= 0 else ""
+    return f"{sign}{delta:.1f}%"
+
+
 def build_admin_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -524,7 +534,18 @@ async def cb_admin_actions(
     if action[1] == "stats":
         await state.clear()
         total_users = await storage.count_users()
-        new_users = await storage.count_new_users_last_hours(24)
+        new_today = await storage.count_new_users_last_hours(24)
+        new_week = await storage.count_new_users_last_hours(24 * 7)
+        new_month = await storage.count_new_users_last_hours(24 * 30)
+
+        prev_today = max(0, await storage.count_new_users_last_hours(24 * 2) - new_today)
+        prev_week = max(0, await storage.count_new_users_last_hours(24 * 14) - new_week)
+        prev_month = max(0, await storage.count_new_users_last_hours(24 * 60) - new_month)
+
+        growth_today = _growth_percent(new_today, prev_today)
+        growth_week = _growth_percent(new_week, prev_week)
+        growth_month = _growth_percent(new_month, prev_month)
+
         proxies = proxy_store.load_all()
         enabled_proxies = len([proxy for proxy in proxies if proxy.enabled])
 
@@ -532,7 +553,11 @@ async def cb_admin_actions(
             "<b>Статистика бота</b>\n\n"
             "<b>Пользователи</b>\n"
             f"• Всего: <b>{total_users}</b>\n"
-            f"• Новые за 24ч: <b>{new_users}</b>\n"
+            "\n"
+            "<b>📈 Новые пользователи</b>\n"
+            f"• Сегодня: <b>{new_today}</b> ({growth_today})\n"
+            f"• За неделю: <b>{new_week}</b> ({growth_week})\n"
+            f"• За месяц: <b>{new_month}</b> ({growth_month})\n"
             "\n"
             "<b>Прокси</b>\n"
             f"• Всего: <b>{len(proxies)}</b>\n"
