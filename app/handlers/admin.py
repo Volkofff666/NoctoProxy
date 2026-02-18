@@ -1,8 +1,11 @@
 ﻿from __future__ import annotations
 
 import asyncio
+import html
 import logging
+import re
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
@@ -28,6 +31,7 @@ class AddProxyForm(StatesGroup):
 
 class BroadcastForm(StatesGroup):
     text = State()
+    buttons = State()
 
 
 class UserSearchForm(StatesGroup):
@@ -254,10 +258,20 @@ async def _safe_delete_message(message: Message) -> None:
         return
 
 
-async def _send_broadcast_message(bot: Bot, tg_id: int, text: str) -> bool:
+async def _send_broadcast_message(
+    bot: Bot,
+    tg_id: int,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> bool:
     for _ in range(2):
         try:
-            await bot.send_message(chat_id=tg_id, text=text, disable_web_page_preview=True)
+            await bot.send_message(
+                chat_id=tg_id,
+                text=text,
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
             return True
         except TelegramRetryAfter as exc:
             await asyncio.sleep(float(exc.retry_after) + 0.5)
@@ -267,6 +281,55 @@ async def _send_broadcast_message(bot: Bot, tg_id: int, text: str) -> bool:
             LOGGER.exception("Unexpected broadcast error for tg_id=%s", tg_id)
             return False
     return False
+
+
+def _plain_text(value: str) -> str:
+    return html.unescape(re.sub(r"<[^>]+>", "", value or "")).strip()
+
+
+def _build_share_url(bot_username: str | None, share_text: str) -> str:
+    invite_link = f"https://t.me/{bot_username}" if bot_username else "https://t.me"
+    safe_text = share_text.strip() or "Подключай бесплатный Proxy для Telegram"
+    return (
+        f"https://t.me/share/url?url={quote(invite_link, safe='')}"
+        f"&text={quote(safe_text, safe='')}"
+    )
+
+
+def _parse_broadcast_buttons(raw: str, share_url: str) -> tuple[InlineKeyboardMarkup | None, str | None]:
+    text = raw.strip()
+    if text.lower() in {"", "-", "нет", "skip"}:
+        return None, None
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if "|" not in line:
+            return None, "Неверный формат. Используйте: Текст кнопки | URL"
+
+        label, target = line.split("|", 1)
+        label = label.strip()
+        target = target.strip()
+        if not label or not target:
+            return None, "Неверный формат. У кнопки должны быть текст и URL."
+
+        if target.lower() == "share":
+            target = share_url
+
+        if not (
+            target.startswith("https://")
+            or target.startswith("http://")
+            or target.startswith("tg://")
+        ):
+            return None, f"Неверный URL у кнопки: {label}"
+
+        rows.append([InlineKeyboardButton(text=label, url=target)])
+
+    if not rows:
+        return None, None
+    return InlineKeyboardMarkup(inline_keyboard=rows), None
 
 
 @router.message(Command("admin"))
@@ -953,6 +1016,43 @@ async def add_proxy_secret(
 
 
 @router.message(BroadcastForm.text)
+async def prepare_broadcast(
+    message: Message,
+    state: FSMContext,
+    admin_ids: set[int],
+    bot: Bot,
+) -> None:
+    if not _is_admin(message.from_user.id, admin_ids):
+        return
+
+    text = (message.html_text or message.text or "").strip()
+    await _safe_delete_message(message)
+    if not text:
+        await _edit_panel(
+            bot,
+            state,
+            "Текст пустой.\n\nРассылка\n\nОтправьте текст одним сообщением.",
+            build_wizard_keyboard("admin:menu"),
+        )
+        return
+
+    await state.update_data(broadcast_text=text)
+    await state.set_state(BroadcastForm.buttons)
+    await _edit_panel(
+        bot,
+        state,
+        (
+            "Рассылка\n\n"
+            "Шаг 2/2: отправьте кнопки (каждая с новой строки) в формате:\n"
+            "<code>Текст кнопки | URL</code>\n\n"
+            "Если кнопки не нужны, отправьте <code>нет</code>.\n"
+            "Спец-URL <code>share</code> создаст кнопку поделиться ботом."
+        ),
+        build_wizard_keyboard("admin:menu"),
+    )
+
+
+@router.message(BroadcastForm.buttons)
 async def send_broadcast(
     message: Message,
     state: FSMContext,
@@ -964,13 +1064,28 @@ async def send_broadcast(
     if not _is_admin(message.from_user.id, admin_ids):
         return
 
-    text = (message.text or "").strip()
+    raw_buttons = (message.text or "").strip()
     await _safe_delete_message(message)
+    data = await state.get_data()
+    text = str(data.get("broadcast_text", "")).strip()
     if not text:
+        await state.clear()
+        await message.answer("Текст рассылки потерян. Запустите рассылку заново.", reply_markup=build_admin_menu())
+        return
+
+    me = await bot.get_me()
+    share_url = _build_share_url(me.username, _plain_text(text))
+    keyboard, parse_error = _parse_broadcast_buttons(raw_buttons, share_url)
+    if parse_error:
         await _edit_panel(
             bot,
             state,
-            "Текст пустой.\n\nРассылка\n\nОтправьте текст одним сообщением.",
+            (
+                "Ошибка в кнопках.\n"
+                f"{parse_error}\n\n"
+                "Формат: <code>Текст кнопки | URL</code>\n"
+                "Либо отправьте <code>нет</code>, чтобы сделать рассылку без кнопок."
+            ),
             build_wizard_keyboard("admin:menu"),
         )
         return
@@ -996,7 +1111,7 @@ async def send_broadcast(
             tg_id = await queue.get()
             if tg_id is None:
                 return
-            ok = await _send_broadcast_message(bot, tg_id, text)
+            ok = await _send_broadcast_message(bot, tg_id, text, reply_markup=keyboard)
             async with lock:
                 if ok:
                     success += 1
