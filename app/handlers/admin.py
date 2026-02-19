@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 
 from aiogram import Bot, F, Router
+from aiogram.enums import ChatMemberStatus
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
@@ -39,6 +40,10 @@ class UserSearchForm(StatesGroup):
 
 
 class UserWriteForm(StatesGroup):
+    text = State()
+
+
+class ChannelInviteForm(StatesGroup):
     text = State()
 
 
@@ -82,12 +87,48 @@ def _growth_percent(current: int, previous: int) -> str:
     return f"{sign}{delta:.1f}%"
 
 
+def _is_subscribed_status(status: str) -> bool:
+    return status in {
+        ChatMemberStatus.MEMBER,
+        ChatMemberStatus.ADMINISTRATOR,
+        ChatMemberStatus.CREATOR,
+    }
+
+
+def build_channel_invite_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🚀 Запустить рассылку", callback_data="admin:channel_invite_run")],
+            [InlineKeyboardButton(text="✏️ Изменить текст", callback_data="admin:channel_invite_edit")],
+            [InlineKeyboardButton(text="📊 Статистика кампании", callback_data="admin:channel_invite_stats")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:menu")],
+        ]
+    )
+
+
+def _cut_text(text: str, limit: int = 500) -> str:
+    value = (text or "").strip()
+    if len(value) <= limit:
+        return value
+    return value[:limit].rstrip() + "..."
+
+
+def build_channel_invite_screen_text(text: str) -> str:
+    return (
+        "<b>Кампания приглашения в канал</b>\n\n"
+        "Рассылка отправляется только тем пользователям, которые не подписаны на канал.\n\n"
+        "<b>Текущий текст:</b>\n"
+        f"{_cut_text(text)}"
+    )
+
+
 def build_admin_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📋 Список прокси", callback_data="admin:list")],
             [InlineKeyboardButton(text="➕ Добавить прокси", callback_data="admin:add")],
             [InlineKeyboardButton(text="📣 Рассылка", callback_data="admin:broadcast")],
+            [InlineKeyboardButton(text="📢 Кампания канала", callback_data="admin:channel_invite")],
             [InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats")],
             [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:users")],
             [InlineKeyboardButton(text="⬅️ В главное меню", callback_data="user:home")],
@@ -293,6 +334,36 @@ async def _send_broadcast_message(
     return False
 
 
+async def _send_channel_invite_message(
+    bot: Bot,
+    tg_id: int,
+    text: str,
+    channel_url: str,
+) -> bool:
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Подписаться на канал", url=channel_url)],
+        ]
+    )
+    for _ in range(2):
+        try:
+            await bot.send_message(
+                chat_id=tg_id,
+                text=text,
+                reply_markup=keyboard,
+                disable_web_page_preview=True,
+            )
+            return True
+        except TelegramRetryAfter as exc:
+            await asyncio.sleep(float(exc.retry_after) + 0.5)
+        except (TelegramForbiddenError, TelegramBadRequest):
+            return False
+        except Exception:
+            LOGGER.exception("Unexpected channel invite error for tg_id=%s", tg_id)
+            return False
+    return False
+
+
 def _plain_text(value: str) -> str:
     return html.unescape(re.sub(r"<[^>]+>", "", value or "")).strip()
 
@@ -375,6 +446,9 @@ async def cb_admin_actions(
     proxy_store: ProxyStore,
     storage: Storage,
     state: FSMContext,
+    channel_url: str | None,
+    channel_id: str | None,
+    channel_campaign_workers: int,
 ) -> None:
     if not _is_admin(callback.from_user.id, admin_ids):
         await callback.answer("Недостаточно прав", show_alert=True)
@@ -529,6 +603,165 @@ async def cb_admin_actions(
             reply_markup=build_wizard_keyboard("admin:menu"),
         )
         await callback.answer()
+        return
+
+    if action[1] == "channel_invite":
+        await state.clear()
+        template_text = await storage.get_channel_invite_text()
+        await callback.message.edit_text(
+            build_channel_invite_screen_text(template_text),
+            reply_markup=build_channel_invite_menu(),
+            disable_web_page_preview=True,
+        )
+        await callback.answer()
+        return
+
+    if action[1] == "channel_invite_edit":
+        await state.clear()
+        await state.set_state(ChannelInviteForm.text)
+        await _save_panel_ref(state, callback)
+        current_text = await storage.get_channel_invite_text()
+        await callback.message.edit_text(
+            (
+                "<b>Изменение текста приглашения</b>\n\n"
+                "Отправьте новый текст одним сообщением.\n\n"
+                "<b>Текущий текст:</b>\n"
+                f"{_cut_text(current_text, 350)}"
+            ),
+            reply_markup=build_wizard_keyboard("admin:channel_invite"),
+            disable_web_page_preview=True,
+        )
+        await callback.answer()
+        return
+
+    if action[1] == "channel_invite_stats":
+        await state.clear()
+        stats = await storage.get_channel_invite_stats()
+        if stats["runs_count"] == 0:
+            text = (
+                "<b>Статистика кампании</b>\n\n"
+                "Запусков еще не было."
+            )
+        else:
+            text = (
+                "<b>Статистика кампании</b>\n\n"
+                f"• Запусков: <b>{stats['runs_count']}</b>\n"
+                f"• Всего отправлено: <b>{stats['sent_ok_total']}</b>\n"
+                f"• Всего ошибок: <b>{stats['sent_failed_total']}</b>\n\n"
+                "<b>Последний запуск:</b>\n"
+                f"• Дата: <b>{stats['last_created_at']}</b>\n"
+                f"• Пользователей в базе: <b>{stats['last_total_users']}</b>\n"
+                f"• Уже подписаны: <b>{stats['last_subscribed_users']}</b>\n"
+                f"• Целевые (без подписки): <b>{stats['last_target_users']}</b>\n"
+                f"• Доставлено: <b>{stats['last_sent_ok']}</b>\n"
+                f"• Ошибок: <b>{stats['last_sent_failed']}</b>"
+            )
+        await callback.message.edit_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:channel_invite")]]
+            ),
+        )
+        await callback.answer()
+        return
+
+    if action[1] == "channel_invite_run":
+        await state.clear()
+        if not channel_url or not channel_id:
+            await callback.answer("Нужно задать CHANNEL_URL и CHANNEL_ID в .env", show_alert=True)
+            return
+
+        await callback.message.edit_text(
+            "Кампания в процессе...\nПроверяю подписку и отправляю приглашения.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:channel_invite")]]
+            ),
+        )
+        await callback.answer()
+
+        user_ids = await storage.get_all_user_ids()
+        total_users = len(user_ids)
+        subscribed_users = 0
+        target_users = 0
+        sent_ok = 0
+        sent_failed = 0
+        template_text = await storage.get_channel_invite_text()
+        workers = max(1, int(channel_campaign_workers))
+
+        queue: asyncio.Queue[int | None] = asyncio.Queue()
+        for tg_id in user_ids:
+            queue.put_nowait(int(tg_id))
+        for _ in range(workers):
+            queue.put_nowait(None)
+
+        lock = asyncio.Lock()
+
+        async def worker() -> None:
+            nonlocal subscribed_users, target_users, sent_ok, sent_failed
+            while True:
+                tg_id = await queue.get()
+                if tg_id is None:
+                    return
+
+                is_subscribed = False
+                try:
+                    member = await callback.bot.get_chat_member(chat_id=channel_id, user_id=tg_id)
+                    is_subscribed = _is_subscribed_status(member.status)
+                except TelegramRetryAfter as exc:
+                    await asyncio.sleep(float(exc.retry_after) + 0.5)
+                    try:
+                        member = await callback.bot.get_chat_member(chat_id=channel_id, user_id=tg_id)
+                        is_subscribed = _is_subscribed_status(member.status)
+                    except Exception:
+                        is_subscribed = False
+                except TelegramBadRequest:
+                    is_subscribed = False
+                except Exception:
+                    LOGGER.exception("Failed to check chat member for tg_id=%s", tg_id)
+                    is_subscribed = False
+
+                if is_subscribed:
+                    async with lock:
+                        subscribed_users += 1
+                    continue
+
+                async with lock:
+                    target_users += 1
+
+                ok = await _send_channel_invite_message(
+                    callback.bot,
+                    tg_id,
+                    template_text,
+                    channel_url,
+                )
+                async with lock:
+                    if ok:
+                        sent_ok += 1
+                    else:
+                        sent_failed += 1
+
+        await asyncio.gather(*(worker() for _ in range(workers)))
+
+        await storage.add_channel_invite_run(
+            total_users=total_users,
+            subscribed_users=subscribed_users,
+            target_users=target_users,
+            sent_ok=sent_ok,
+            sent_failed=sent_failed,
+            template_text=template_text,
+        )
+
+        await callback.message.edit_text(
+            (
+                "<b>Кампания завершена</b>\n\n"
+                f"• Пользователей в базе: <b>{total_users}</b>\n"
+                f"• Уже подписаны: <b>{subscribed_users}</b>\n"
+                f"• Без подписки: <b>{target_users}</b>\n"
+                f"• Доставлено: <b>{sent_ok}</b>\n"
+                f"• Ошибок: <b>{sent_failed}</b>"
+            ),
+            reply_markup=build_channel_invite_menu(),
+        )
         return
 
     if action[1] == "stats":
@@ -891,6 +1124,38 @@ async def user_write_message(
         state,
         profile_text,
         build_user_profile_keyboard(target_tg_id, page, source),
+    )
+    await state.clear()
+
+
+@router.message(ChannelInviteForm.text)
+async def channel_invite_update_text(
+    message: Message,
+    state: FSMContext,
+    admin_ids: set[int],
+    storage: Storage,
+    bot: Bot,
+) -> None:
+    if not _is_admin(message.from_user.id, admin_ids):
+        return
+
+    new_text = (message.html_text or message.text or "").strip()
+    await _safe_delete_message(message)
+    if not new_text:
+        await _edit_panel(
+            bot,
+            state,
+            "<b>Текст не может быть пустым.</b>\n\nОтправьте новый текст приглашения.",
+            build_wizard_keyboard("admin:channel_invite"),
+        )
+        return
+
+    await storage.set_channel_invite_text(new_text)
+    await _edit_panel(
+        bot,
+        state,
+        build_channel_invite_screen_text(new_text),
+        build_channel_invite_menu(),
     )
     await state.clear()
 

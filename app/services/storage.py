@@ -43,11 +43,36 @@ class Storage:
                 )
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS channel_invite_config (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    text TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS channel_invite_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    total_users INTEGER NOT NULL,
+                    subscribed_users INTEGER NOT NULL,
+                    target_users INTEGER NOT NULL,
+                    sent_ok INTEGER NOT NULL,
+                    sent_failed INTEGER NOT NULL,
+                    template_text TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
             await self._ensure_users_columns(db)
             await db.execute("CREATE INDEX IF NOT EXISTS idx_users_last_seen ON users(last_seen)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_users_first_seen ON users(first_seen)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_share_events_tg_id ON share_events(tg_id)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_share_events_created_at ON share_events(created_at)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_channel_invite_runs_created_at ON channel_invite_runs(created_at)")
+            await self._ensure_channel_invite_defaults(db)
             await db.commit()
 
     async def _ensure_users_columns(self, db: aiosqlite.Connection) -> None:
@@ -65,6 +90,20 @@ class Storage:
             await db.execute("ALTER TABLE users ADD COLUMN is_proxy_connected INTEGER NOT NULL DEFAULT 0")
         if "proxy_connected_at" not in existing:
             await db.execute("ALTER TABLE users ADD COLUMN proxy_connected_at TEXT")
+
+    async def _ensure_channel_invite_defaults(self, db: aiosqlite.Connection) -> None:
+        now = utc_now_str()
+        default_text = (
+            "У нас есть Telegram-канал с обновлениями, новостями и полезными подсказками.\n\n"
+            "Подпишитесь, чтобы ничего не пропускать."
+        )
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO channel_invite_config (id, text, updated_at)
+            VALUES (1, ?, ?)
+            """,
+            (default_text, now),
+        )
 
     async def touch_user(
         self,
@@ -358,3 +397,105 @@ class Storage:
             cursor = await db.execute("SELECT tg_id FROM users")
             rows = await cursor.fetchall()
             return [int(row[0]) for row in rows]
+
+    async def get_channel_invite_text(self) -> str:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT text FROM channel_invite_config WHERE id = 1")
+            row = await cursor.fetchone()
+            return str(row[0]) if row else ""
+
+    async def set_channel_invite_text(self, text: str) -> None:
+        now = utc_now_str()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO channel_invite_config (id, text, updated_at)
+                VALUES (1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    text = excluded.text,
+                    updated_at = excluded.updated_at
+                """,
+                (text, now),
+            )
+            await db.commit()
+
+    async def add_channel_invite_run(
+        self,
+        total_users: int,
+        subscribed_users: int,
+        target_users: int,
+        sent_ok: int,
+        sent_failed: int,
+        template_text: str,
+    ) -> None:
+        now = utc_now_str()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO channel_invite_runs (
+                    total_users,
+                    subscribed_users,
+                    target_users,
+                    sent_ok,
+                    sent_failed,
+                    template_text,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(total_users),
+                    int(subscribed_users),
+                    int(target_users),
+                    int(sent_ok),
+                    int(sent_failed),
+                    template_text,
+                    now,
+                ),
+            )
+            await db.commit()
+
+    async def get_channel_invite_stats(self) -> dict[str, int | str | None]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT
+                    COUNT(*) AS runs_count,
+                    COALESCE(SUM(sent_ok), 0) AS sent_ok_total,
+                    COALESCE(SUM(sent_failed), 0) AS sent_failed_total
+                FROM channel_invite_runs
+                """
+            )
+            totals = await cursor.fetchone()
+            cursor = await db.execute(
+                """
+                SELECT total_users, subscribed_users, target_users, sent_ok, sent_failed, created_at
+                FROM channel_invite_runs
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            )
+            last = await cursor.fetchone()
+
+        result: dict[str, int | str | None] = {
+            "runs_count": int(totals[0] if totals else 0),
+            "sent_ok_total": int(totals[1] if totals else 0),
+            "sent_failed_total": int(totals[2] if totals else 0),
+            "last_total_users": None,
+            "last_subscribed_users": None,
+            "last_target_users": None,
+            "last_sent_ok": None,
+            "last_sent_failed": None,
+            "last_created_at": None,
+        }
+        if last:
+            result.update(
+                {
+                    "last_total_users": int(last[0]),
+                    "last_subscribed_users": int(last[1]),
+                    "last_target_users": int(last[2]),
+                    "last_sent_ok": int(last[3]),
+                    "last_sent_failed": int(last[4]),
+                    "last_created_at": str(last[5]),
+                }
+            )
+        return result

@@ -48,7 +48,10 @@ async def main() -> None:
     vpn_promo_bonus_days = int(os.getenv("VPN_PROMO_BONUS_DAYS", "3"))
     channel_url_raw = os.getenv("CHANNEL_URL", "").strip()
     channel_url = channel_url_raw if channel_url_raw else None
+    channel_id_raw = os.getenv("CHANNEL_ID", "").strip()
+    channel_id = channel_id_raw if channel_id_raw else None
     channel_reminder_delay_sec = int(os.getenv("CHANNEL_REMINDER_DELAY_SEC", "1800"))
+    channel_campaign_workers = int(os.getenv("CHANNEL_CAMPAIGN_WORKERS", "10"))
     broadcast_workers = int(os.getenv("BROADCAST_WORKERS", "20"))
     tribute_url_raw = os.getenv("TRIBUTE_URL", "").strip()
     tribute_url = tribute_url_raw if tribute_url_raw else None
@@ -108,7 +111,9 @@ async def main() -> None:
             "vpn_promo_code": vpn_promo_code,
             "vpn_promo_bonus_days": vpn_promo_bonus_days,
             "channel_url": channel_url,
+            "channel_id": channel_id,
             "channel_reminder_delay_sec": channel_reminder_delay_sec,
+            "channel_campaign_workers": channel_campaign_workers,
             "broadcast_workers": broadcast_workers,
             "tribute_url": tribute_url,
             "admin_ids": admin_ids,
