@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from aiogram import Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
 from app.handlers.admin import build_admin_menu
@@ -51,5 +52,9 @@ async def cb_fallback(
         channel_url,
         show_admin_panel=user.id in admin_ids,
     )
-    await _safe_edit(callback, _main_menu_text(), reply_markup=keyboard)
-    await callback.answer("Кнопка устарела, открыл актуальное меню")
+    await callback.answer("Открыл актуальное меню")
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
+    await callback.message.answer(_main_menu_text(), reply_markup=keyboard)

@@ -468,8 +468,12 @@ async def cb_user_home(
         channel_url,
         show_admin_panel=user.id in admin_ids,
     )
-    await _safe_edit(callback, _main_menu_text(), reply_markup=keyboard)
     await callback.answer()
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
+    await callback.message.answer(_main_menu_text(), reply_markup=keyboard)
 
 
 @router.callback_query(F.data == "user:check_sub")
@@ -519,8 +523,12 @@ async def cb_check_sub(
         channel_url,
         show_admin_panel=user.id in admin_ids,
     )
-    await _safe_edit(callback, _main_menu_text(), reply_markup=keyboard)
     await callback.answer("Отлично, доступ открыт! 🎉")
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
+    await callback.message.answer(_main_menu_text(), reply_markup=keyboard)
 
 
 @router.callback_query(F.data.in_({"user:instruction", "instruction"}))
