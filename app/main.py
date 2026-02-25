@@ -51,6 +51,8 @@ async def main() -> None:
     channel_id_raw = os.getenv("CHANNEL_ID", "").strip()
     channel_id = channel_id_raw if channel_id_raw else None
     channel_reminder_delay_sec = int(os.getenv("CHANNEL_REMINDER_DELAY_SEC", "1800"))
+    vpn_onboarding_delay_sec = int(os.getenv("ONBOARDING_VPN_DELAY_SEC", "600"))
+    vpn_onboarding_final_delay_sec = int(os.getenv("ONBOARDING_VPN_FINAL_DELAY_SEC", "86400"))
     channel_campaign_workers = int(os.getenv("CHANNEL_CAMPAIGN_WORKERS", "10"))
     broadcast_workers = int(os.getenv("BROADCAST_WORKERS", "20"))
     tribute_url_raw = os.getenv("TRIBUTE_URL", "").strip()
@@ -113,6 +115,8 @@ async def main() -> None:
             "channel_url": channel_url,
             "channel_id": channel_id,
             "channel_reminder_delay_sec": channel_reminder_delay_sec,
+            "vpn_onboarding_delay_sec": vpn_onboarding_delay_sec,
+            "vpn_onboarding_final_delay_sec": vpn_onboarding_final_delay_sec,
             "channel_campaign_workers": channel_campaign_workers,
             "broadcast_workers": broadcast_workers,
             "tribute_url": tribute_url,

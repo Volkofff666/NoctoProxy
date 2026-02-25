@@ -1,16 +1,19 @@
 ﻿from __future__ import annotations
 
+import logging
 from urllib.parse import quote
 
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from app.handlers.start import _check_subscribed, build_subscribe_gate_keyboard
 from app.services.proxy_links import ProxyStore
 from app.services.rate_limit import InMemoryRateLimiter
 from app.services.storage import Storage
 
 router = Router()
+LOGGER = logging.getLogger(__name__)
 
 
 def build_proxy_keyboard(index: int, name: str, tme_link: str) -> InlineKeyboardMarkup:
@@ -35,6 +38,8 @@ async def cmd_proxy(
     storage: Storage,
     rate_limiter: InMemoryRateLimiter,
     support_username: str,
+    channel_id: str | None,
+    channel_url: str | None,
 ) -> None:
     user = message.from_user
     await storage.touch_user(
@@ -55,6 +60,16 @@ async def cmd_proxy(
             f"Поддержка: https://t.me/{support_username}"
         )
         return
+
+    # Subscribe-gate check
+    if channel_id and channel_url:
+        subscribed = await _check_subscribed(message.bot, channel_id, user.id)
+        if not subscribed:
+            await message.answer(
+                "Чтобы получить прокси — подпишитесь на наш канал.",
+                reply_markup=build_subscribe_gate_keyboard(channel_url),
+            )
+            return
 
     intro = (
         "<b>Доступные прокси для Telegram</b>\n"

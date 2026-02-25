@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+import logging
+
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram import Router
@@ -7,6 +9,7 @@ from aiogram import Router
 from app.services.storage import Storage
 
 router = Router()
+LOGGER = logging.getLogger(__name__)
 
 
 @router.message(Command("donate"))

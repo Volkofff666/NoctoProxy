@@ -90,6 +90,8 @@ class Storage:
             await db.execute("ALTER TABLE users ADD COLUMN is_proxy_connected INTEGER NOT NULL DEFAULT 0")
         if "proxy_connected_at" not in existing:
             await db.execute("ALTER TABLE users ADD COLUMN proxy_connected_at TEXT")
+        if "referred_by" not in existing:
+            await db.execute("ALTER TABLE users ADD COLUMN referred_by INTEGER")
 
     async def _ensure_channel_invite_defaults(self, db: aiosqlite.Connection) -> None:
         now = utc_now_str()
@@ -453,6 +455,31 @@ class Storage:
                 ),
             )
             await db.commit()
+
+    async def set_referrer(self, tg_id: int, referrer_id: int) -> bool:
+        """Set referrer for a user. Ignored if already set or self-referral."""
+        if tg_id == referrer_id:
+            return False
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                UPDATE users
+                SET referred_by = ?
+                WHERE tg_id = ? AND referred_by IS NULL
+                """,
+                (int(referrer_id), int(tg_id)),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def count_referrals(self, referrer_id: int) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM users WHERE referred_by = ?",
+                (int(referrer_id),),
+            )
+            row = await cursor.fetchone()
+            return int(row[0] if row else 0)
 
     async def get_channel_invite_stats(self) -> dict[str, int | str | None]:
         async with aiosqlite.connect(self.db_path) as db:

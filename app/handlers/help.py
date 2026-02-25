@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+import logging
+
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery
@@ -7,6 +9,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, C
 from app.services.storage import Storage
 
 router = Router()
+LOGGER = logging.getLogger(__name__)
 
 
 @router.message(Command("help"))
