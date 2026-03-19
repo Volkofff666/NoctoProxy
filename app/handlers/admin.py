@@ -5,7 +5,7 @@ import html
 import logging
 import re
 from datetime import datetime, timezone
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatMemberStatus
@@ -31,7 +31,8 @@ class AddProxyForm(StatesGroup):
 
 
 class BroadcastForm(StatesGroup):
-    text = State()
+    media = State()
+    confirm = State()
     buttons = State()
 
 
@@ -45,6 +46,15 @@ class UserWriteForm(StatesGroup):
 
 class ChannelInviteForm(StatesGroup):
     text = State()
+
+
+class EditProxyNameForm(StatesGroup):
+    name = State()
+
+
+class AddProxyFromLinkForm(StatesGroup):
+    link = State()
+    name = State()
 
 
 def _is_admin(user_id: int, admin_ids: set[int]) -> bool:
@@ -128,10 +138,22 @@ def build_admin_menu() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="📋 Список прокси", callback_data="admin:list")],
             [InlineKeyboardButton(text="➕ Добавить прокси", callback_data="admin:add")],
             [InlineKeyboardButton(text="📣 Рассылка", callback_data="admin:broadcast")],
-            [InlineKeyboardButton(text="📢 Кампания канала", callback_data="admin:channel_invite")],
+            [InlineKeyboardButton(text="🧪 Тест авто-сообщений", callback_data="admin:test_cta")],
             [InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats")],
             [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:users")],
             [InlineKeyboardButton(text="⬅️ В главное меню", callback_data="user:home")],
+        ]
+    )
+
+
+def build_test_cta_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="1️⃣ VPN промо #1 (~10 мин)", callback_data="admin:test_cta:vpn1")],
+            [InlineKeyboardButton(text="2️⃣ VPN промо #2 (~24 ч)", callback_data="admin:test_cta:vpn2")],
+            [InlineKeyboardButton(text="3️⃣ VPN промо #3 — дожим (~3 дня)", callback_data="admin:test_cta:vpn3")],
+            [InlineKeyboardButton(text="📣 Напоминание о канале", callback_data="admin:test_cta:channel")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:menu")],
         ]
     )
 
@@ -155,18 +177,45 @@ def build_admin_dashboard_text(
     )
 
 
-def build_proxy_manage_keyboard(proxies: list[ProxyItem]) -> InlineKeyboardMarkup:
+def build_proxy_list_keyboard(proxies: list[ProxyItem]) -> InlineKeyboardMarkup:
+    """One button per proxy — opens the proxy card."""
     rows: list[list[InlineKeyboardButton]] = []
+    first_enabled_seen = False
     for idx, proxy in enumerate(proxies):
-        action_text = "⛔ Выкл" if proxy.enabled else "✅ Вкл"
-        rows.append(
-            [
-                InlineKeyboardButton(text=f"{action_text} {proxy.name}", callback_data=f"admin:toggle:{idx}"),
-                InlineKeyboardButton(text="🗑 Удалить", callback_data=f"admin:delete:{idx}"),
-            ]
-        )
+        icon = "✅" if proxy.enabled else "⛔"
+        label = f"{icon} {proxy.name}"
+        if proxy.enabled and not first_enabled_seen:
+            label += " 👑"
+            first_enabled_seen = True
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"admin:proxy:{idx}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_proxy_card_keyboard(idx: int, proxy: ProxyItem, is_main: bool) -> InlineKeyboardMarkup:
+    """Card actions for a single proxy."""
+    toggle_text = "⛔ Выключить" if proxy.enabled else "✅ Включить"
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text=toggle_text, callback_data=f"admin:toggle:{idx}")],
+    ]
+    if not is_main:
+        rows.append([InlineKeyboardButton(text="⬆️ Сделать главным", callback_data=f"admin:proxy_main:{idx}")])
+    rows += [
+        [InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"admin:proxy_edit_name:{idx}")],
+        [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"admin:delete:{idx}")],
+        [InlineKeyboardButton(text="⬅️ К списку", callback_data="admin:list")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_add_method_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔗 Вставить ссылку t.me/proxy", callback_data="admin:add:link")],
+            [InlineKeyboardButton(text="✏️ Ввести вручную (4 шага)", callback_data="admin:add:manual")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:menu")],
+        ]
+    )
 
 
 def build_wizard_keyboard(back_to: str) -> InlineKeyboardMarkup:
@@ -246,6 +295,20 @@ def build_user_search_results_keyboard(users: list[dict[str, str | int | None]])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _proxy_card_text(idx: int, proxy: ProxyItem, is_main: bool) -> str:
+    status = "✅ Включён" if proxy.enabled else "⛔ Выключен"
+    main_note = " 👑 (главный)" if is_main else ""
+    secret_preview = proxy.secret[:8] + "…" if len(proxy.secret) > 8 else proxy.secret
+    return (
+        f"<b>📡 {proxy.name}</b>{main_note}\n\n"
+        f"• Статус: {status}\n"
+        f"• Сервер: <code>{proxy.server}</code>\n"
+        f"• Порт: <code>{proxy.port}</code>\n"
+        f"• Secret: <code>{secret_preview}</code>\n\n"
+        f"Ссылка: {proxy.tme_link}"
+    )
+
+
 def _add_step_text(step: str, data: dict) -> str:
     name = data.get("name", "—")
     server = data.get("server", "—")
@@ -313,16 +376,25 @@ async def _send_broadcast_message(
     bot: Bot,
     tg_id: int,
     text: str,
+    photo_id: str | None = None,
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> bool:
     for _ in range(2):
         try:
-            await bot.send_message(
-                chat_id=tg_id,
-                text=text,
-                reply_markup=reply_markup,
-                disable_web_page_preview=True,
-            )
+            if photo_id:
+                await bot.send_photo(
+                    chat_id=tg_id,
+                    photo=photo_id,
+                    caption=text or None,
+                    reply_markup=reply_markup,
+                )
+            else:
+                await bot.send_message(
+                    chat_id=tg_id,
+                    text=text,
+                    reply_markup=reply_markup,
+                    disable_web_page_preview=True,
+                )
             return True
         except TelegramRetryAfter as exc:
             await asyncio.sleep(float(exc.retry_after) + 0.5)
@@ -332,6 +404,112 @@ async def _send_broadcast_message(
             LOGGER.exception("Unexpected broadcast error for tg_id=%s", tg_id)
             return False
     return False
+
+
+def build_broadcast_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="👥 Всем пользователям", callback_data="admin:bc_send_all")],
+            [InlineKeyboardButton(text="📵 Только не подписанным на канал", callback_data="admin:bc_send_unsub")],
+            [InlineKeyboardButton(text="🔘 Добавить кнопки", callback_data="admin:bc_buttons")],
+            [InlineKeyboardButton(text="✖️ Отмена", callback_data="admin:menu")],
+        ]
+    )
+
+
+async def _execute_broadcast(
+    bot: Bot,
+    storage: Storage,
+    broadcast_workers: int,
+    panel_chat_id: int,
+    panel_message_id: int,
+    text: str,
+    photo_id: str | None,
+    keyboard: InlineKeyboardMarkup | None,
+    filter_unsub: bool = False,
+    channel_id: str | None = None,
+) -> None:
+    audience_label = "не подписанным на канал" if filter_unsub else "всем пользователям"
+    try:
+        await bot.edit_message_text(
+            chat_id=panel_chat_id,
+            message_id=panel_message_id,
+            text=f"⏳ Рассылка в процессе ({audience_label})...",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="⬅️ В меню", callback_data="admin:menu")]]
+            ),
+        )
+    except TelegramBadRequest:
+        pass
+
+    user_ids = await storage.get_all_user_ids()
+    success = 0
+    failed = 0
+    skipped = 0
+    worker_count = max(1, int(broadcast_workers))
+    queue: asyncio.Queue[int | None] = asyncio.Queue()
+
+    for tg_id in user_ids:
+        queue.put_nowait(int(tg_id))
+    for _ in range(worker_count):
+        queue.put_nowait(None)
+
+    lock = asyncio.Lock()
+
+    async def worker() -> None:
+        nonlocal success, failed, skipped
+        while True:
+            tg_id = await queue.get()
+            if tg_id is None:
+                return
+
+            if filter_unsub and channel_id:
+                try:
+                    member = await bot.get_chat_member(chat_id=channel_id, user_id=tg_id)
+                    is_sub = _is_subscribed_status(member.status)
+                except TelegramRetryAfter as exc:
+                    await asyncio.sleep(float(exc.retry_after) + 0.5)
+                    try:
+                        member = await bot.get_chat_member(chat_id=channel_id, user_id=tg_id)
+                        is_sub = _is_subscribed_status(member.status)
+                    except Exception:
+                        is_sub = False
+                except Exception:
+                    is_sub = False
+                if is_sub:
+                    async with lock:
+                        skipped += 1
+                    continue
+
+            ok = await _send_broadcast_message(bot, tg_id, text, photo_id=photo_id, reply_markup=keyboard)
+            async with lock:
+                if ok:
+                    success += 1
+                else:
+                    failed += 1
+
+    await asyncio.gather(*(worker() for _ in range(worker_count)))
+
+    result_lines = [
+        "<b>✅ Рассылка завершена</b>\n",
+        f"• Получателей в базе: <b>{len(user_ids)}</b>",
+    ]
+    if filter_unsub:
+        result_lines.append(f"• Уже подписаны (пропущено): <b>{skipped}</b>")
+    result_lines += [
+        f"• Доставлено: <b>{success}</b>",
+        f"• Ошибок: <b>{failed}</b>",
+    ]
+
+    try:
+        await bot.edit_message_text(
+            chat_id=panel_chat_id,
+            message_id=panel_message_id,
+            text="\n".join(result_lines),
+            reply_markup=build_admin_menu(),
+        )
+    except TelegramBadRequest:
+        pass
 
 
 async def _send_channel_invite_message(
@@ -366,6 +544,30 @@ async def _send_channel_invite_message(
 
 def _plain_text(value: str) -> str:
     return html.unescape(re.sub(r"<[^>]+>", "", value or "")).strip()
+
+
+def _parse_proxy_link(link: str) -> tuple[str, int, str] | None:
+    """Parse server/port/secret from a https://t.me/proxy?... or tg://proxy?... URL."""
+    try:
+        link = link.strip()
+        if "t.me/proxy?" in link:
+            query_str = link.split("t.me/proxy?", 1)[1]
+        elif link.lower().startswith("tg://proxy?"):
+            query_str = link[len("tg://proxy?"):]
+        else:
+            return None
+        params = parse_qs(query_str)
+        server = params.get("server", [""])[0].strip()
+        port_str = params.get("port", [""])[0].strip()
+        secret = params.get("secret", [""])[0].strip()
+        if not server or not port_str.isdigit() or not secret:
+            return None
+        port = int(port_str)
+        if port < 1 or port > 65535:
+            return None
+        return server, port, secret
+    except Exception:
+        return None
 
 
 def _build_share_url(bot_username: str | None, share_text: str) -> str:
@@ -449,6 +651,9 @@ async def cb_admin_actions(
     channel_url: str | None,
     channel_id: str | None,
     channel_campaign_workers: int,
+    broadcast_workers: int,
+    vpn_promo_code: str,
+    vpn_promo_bonus_days: int,
 ) -> None:
     if not _is_admin(callback.from_user.id, admin_ids):
         await callback.answer("Недостаточно прав", show_alert=True)
@@ -483,13 +688,15 @@ async def cb_admin_actions(
             await callback.answer()
             return
 
-        lines = ["Прокси:"]
-        for proxy in proxies:
-            status = "enabled" if proxy.enabled else "disabled"
-            lines.append(f"- {proxy.name} ({proxy.server}:{proxy.port}) [{status}]")
+        enabled_count = sum(1 for p in proxies if p.enabled)
+        lines = [f"<b>📋 Прокси ({len(proxies)} шт., {enabled_count} включено)</b>\n"]
+        for idx, proxy in enumerate(proxies):
+            icon = "✅" if proxy.enabled else "⛔"
+            crown = " 👑" if proxy.enabled and idx == next((i for i, p in enumerate(proxies) if p.enabled), -1) else ""
+            lines.append(f"{icon} <b>{proxy.name}</b>{crown} — <code>{proxy.server}:{proxy.port}</code>")
+        lines.append("\nНажмите на прокси для управления:")
 
-        kb = build_proxy_manage_keyboard(proxies)
-        await callback.message.edit_text("\n".join(lines), reply_markup=kb)
+        await callback.message.edit_text("\n".join(lines), reply_markup=build_proxy_list_keyboard(proxies))
         await callback.answer()
         return
 
@@ -503,15 +710,13 @@ async def cb_admin_actions(
         target = proxies[idx]
         target.enabled = not target.enabled
         proxy_store.save_all(proxies)
-        await callback.answer(f"{target.name}: {'enabled' if target.enabled else 'disabled'}")
+        status_label = "включён" if target.enabled else "выключен"
+        await callback.answer(f"{target.name}: {status_label}")
 
-        lines = ["Прокси:"]
-        for proxy in proxies:
-            status = "enabled" if proxy.enabled else "disabled"
-            lines.append(f"- {proxy.name} ({proxy.server}:{proxy.port}) [{status}]")
-
-        kb = build_proxy_manage_keyboard(proxies)
-        await callback.message.edit_text("\n".join(lines), reply_markup=kb)
+        first_enabled_idx = next((i for i, p in enumerate(proxies) if p.enabled), -1)
+        is_main = (idx == first_enabled_idx)
+        text = _proxy_card_text(idx, target, is_main)
+        await callback.message.edit_text(text, reply_markup=build_proxy_card_keyboard(idx, target, is_main))
         return
 
     if action[1] == "delete":
@@ -528,28 +733,53 @@ async def cb_admin_actions(
             back = InlineKeyboardMarkup(
                 inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:menu")]]
             )
-            await callback.message.edit_text("Прокси удален. Список теперь пуст.", reply_markup=back)
+            await callback.message.edit_text("Прокси удалён. Список пуст.", reply_markup=back)
             await callback.answer("Удалено")
             return
 
-        lines = ["Прокси:"]
-        for proxy in proxies:
-            status = "enabled" if proxy.enabled else "disabled"
-            lines.append(f"- {proxy.name} ({proxy.server}:{proxy.port}) [{status}]")
+        enabled_count = sum(1 for p in proxies if p.enabled)
+        lines = [f"<b>📋 Прокси ({len(proxies)} шт., {enabled_count} включено)</b>\n"]
+        for i, proxy in enumerate(proxies):
+            icon = "✅" if proxy.enabled else "⛔"
+            crown = " 👑" if proxy.enabled and i == next((j for j, p in enumerate(proxies) if p.enabled), -1) else ""
+            lines.append(f"{icon} <b>{proxy.name}</b>{crown} — <code>{proxy.server}:{proxy.port}</code>")
+        lines.append("\nНажмите на прокси для управления:")
 
-        kb = build_proxy_manage_keyboard(proxies)
-        await callback.message.edit_text("\n".join(lines), reply_markup=kb)
-        await callback.answer(f"Удален: {removed.name}")
+        await callback.message.edit_text("\n".join(lines), reply_markup=build_proxy_list_keyboard(proxies))
+        await callback.answer(f"Удалён: {removed.name}")
         return
 
     if action[1] == "add" and len(action) == 2:
+        await state.clear()
+        await callback.message.edit_text(
+            "<b>Добавление прокси</b>\n\n"
+            "Выберите способ добавления:",
+            reply_markup=build_add_method_keyboard(),
+        )
+        await callback.answer()
+        return
+
+    if action[1] == "add" and len(action) > 2 and action[2] == "link":
+        await state.clear()
+        await state.set_state(AddProxyFromLinkForm.link)
+        await _save_panel_ref(state, callback)
+        await callback.message.edit_text(
+            "<b>Добавление по ссылке</b>\n\n"
+            "Отправьте ссылку t.me/proxy или tg://proxy:\n\n"
+            "<code>https://t.me/proxy?server=...&port=...&secret=...</code>",
+            reply_markup=build_wizard_keyboard("admin:add"),
+        )
+        await callback.answer()
+        return
+
+    if action[1] == "add" and len(action) > 2 and action[2] == "manual":
         await state.clear()
         await state.set_state(AddProxyForm.name)
         await state.update_data(name="", server="", port="")
         await _save_panel_ref(state, callback)
         await callback.message.edit_text(
             _add_step_text("name", {}),
-            reply_markup=build_wizard_keyboard("admin:menu"),
+            reply_markup=build_wizard_keyboard("admin:add"),
         )
         await callback.answer()
         return
@@ -564,7 +794,7 @@ async def cb_admin_actions(
                 callback.bot,
                 state,
                 _add_step_text("name", data),
-                build_wizard_keyboard("admin:menu"),
+                build_wizard_keyboard("admin:add"),
             )
             await callback.answer()
             return
@@ -594,12 +824,118 @@ async def cb_admin_actions(
         await callback.answer("Назад недоступно", show_alert=True)
         return
 
+    if action[1] == "proxy" and len(action) == 3 and action[2].isdigit():
+        await state.clear()
+        idx = int(action[2])
+        proxies = proxy_store.load_all()
+        if idx < 0 or idx >= len(proxies):
+            await callback.answer("Прокси не найден", show_alert=True)
+            return
+        proxy = proxies[idx]
+        first_enabled_idx = next((i for i, p in enumerate(proxies) if p.enabled), -1)
+        is_main = (idx == first_enabled_idx)
+        text = _proxy_card_text(idx, proxy, is_main)
+        await callback.message.edit_text(text, reply_markup=build_proxy_card_keyboard(idx, proxy, is_main))
+        await callback.answer()
+        return
+
+    if action[1] == "proxy_main" and len(action) == 3 and action[2].isdigit():
+        idx = int(action[2])
+        proxies = proxy_store.load_all()
+        if idx < 0 or idx >= len(proxies):
+            await callback.answer("Прокси не найден", show_alert=True)
+            return
+        proxy = proxies.pop(idx)
+        proxies.insert(0, proxy)
+        proxy_store.save_all(proxies)
+        await callback.answer(f"«{proxy.name}» теперь главный")
+        # Show card at new index (0)
+        first_enabled_idx = next((i for i, p in enumerate(proxies) if p.enabled), -1)
+        is_main = (0 == first_enabled_idx)
+        text = _proxy_card_text(0, proxy, is_main)
+        await callback.message.edit_text(text, reply_markup=build_proxy_card_keyboard(0, proxy, is_main))
+        return
+
+    if action[1] == "proxy_edit_name" and len(action) == 3 and action[2].isdigit():
+        idx = int(action[2])
+        proxies = proxy_store.load_all()
+        if idx < 0 or idx >= len(proxies):
+            await callback.answer("Прокси не найден", show_alert=True)
+            return
+        proxy = proxies[idx]
+        await state.clear()
+        await state.set_state(EditProxyNameForm.name)
+        await _save_panel_ref(state, callback)
+        await state.update_data(edit_proxy_idx=idx)
+        await callback.message.edit_text(
+            f"<b>Переименование</b>\n\n"
+            f"Текущее название: <b>{proxy.name}</b>\n\n"
+            "Отправьте новое название:",
+            reply_markup=build_wizard_keyboard(f"admin:proxy:{idx}"),
+        )
+        await callback.answer()
+        return
+
     if action[1] == "broadcast" and len(action) == 2:
         await state.clear()
-        await state.set_state(BroadcastForm.text)
+        await state.set_state(BroadcastForm.media)
         await _save_panel_ref(state, callback)
         await callback.message.edit_text(
-            "Рассылка\n\nОтправьте текст одним сообщением.",
+            (
+                "<b>Новая рассылка</b>\n\n"
+                "Отправьте текст или фото с подписью.\n\n"
+                "Поддерживается HTML: <code>&lt;b&gt;</code> <code>&lt;i&gt;</code> "
+                "<code>&lt;code&gt;</code> <code>&lt;a href='...'&gt;</code>"
+            ),
+            reply_markup=build_wizard_keyboard("admin:menu"),
+        )
+        await callback.answer()
+        return
+
+    if action[1] in {"bc_send_all", "bc_send_unsub"}:
+        data = await state.get_data()
+        text = str(data.get("broadcast_text", "")).strip()
+        photo_id = data.get("broadcast_photo_id")
+        panel_chat_id = int(data.get("panel_chat_id") or 0)
+        panel_message_id = int(data.get("panel_message_id") or 0)
+        raw_buttons = str(data.get("broadcast_buttons_raw") or "нет")
+        if not text and not photo_id:
+            await callback.answer("Нет контента для рассылки", show_alert=True)
+            return
+        if not panel_chat_id or not panel_message_id:
+            await callback.answer("Ошибка панели, запустите рассылку заново", show_alert=True)
+            return
+        filter_unsub = action[1] == "bc_send_unsub"
+        if filter_unsub and not channel_id:
+            await callback.answer("CHANNEL_ID не задан в .env — фильтрация невозможна", show_alert=True)
+            return
+        me = await callback.bot.get_me()
+        share_url = _build_share_url(me.username, _plain_text(text))
+        broadcast_keyboard, _ = _parse_broadcast_buttons(raw_buttons, share_url)
+        await state.clear()
+        await callback.answer()
+        await _execute_broadcast(
+            callback.bot, storage, broadcast_workers,
+            panel_chat_id, panel_message_id, text, photo_id, broadcast_keyboard,
+            filter_unsub=filter_unsub, channel_id=channel_id,
+        )
+        return
+
+    if action[1] == "bc_buttons":
+        data = await state.get_data()
+        await state.set_state(BroadcastForm.buttons)
+        preview = _cut_text(str(data.get("broadcast_text", "")), 200)
+        photo_id = data.get("broadcast_photo_id")
+        media_label = "📷 Фото + подпись" if photo_id else "📝 Текст"
+        await callback.message.edit_text(
+            (
+                "<b>Добавление кнопок</b>\n\n"
+                "Введите кнопки, каждую с новой строки:\n"
+                "<code>Текст кнопки | URL</code>\n\n"
+                "Спец-URL <code>share</code> создаст кнопку «Поделиться ботом».\n"
+                "Если кнопки не нужны — отправьте <code>нет</code>.\n\n"
+                f"<b>Контент ({media_label}):</b>\n{preview}"
+            ),
             reply_markup=build_wizard_keyboard("admin:menu"),
         )
         await callback.answer()
@@ -983,6 +1319,99 @@ async def cb_admin_actions(
         await callback.answer("Удалено")
         return
 
+    if action[1] == "test_cta" and len(action) == 2:
+        await state.clear()
+        await callback.message.edit_text(
+            "<b>🧪 Тест авто-сообщений</b>\n\n"
+            "Выберите сообщение — бот пришлёт его вам прямо сейчас, "
+            "как оно выглядит для пользователя (без задержки).",
+            reply_markup=build_test_cta_keyboard(),
+        )
+        await callback.answer()
+        return
+
+    if action[1] == "test_cta" and len(action) == 3:
+        cta_type = action[2]
+        admin_id = callback.from_user.id
+        bot = callback.bot
+
+        if cta_type == "vpn1":
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🚀 Попробовать VPN — 1 день бесплатно", url="https://t.me/noctovpn_bot"),
+            ]])
+            await bot.send_message(
+                admin_id,
+                (
+                    "Кстати — Instagram, YouTube у вас открываются? 🤔\n\n"
+                    "Прокси работает <b>только внутри Telegram</b>. "
+                    "Для всех остальных приложений и сайтов нужен VPN.\n\n"
+                    "У нас есть @noctovpn_bot — первые <b>1 сутки бесплатно</b>, без карты.\n"
+                    f"Промокод <code>{vpn_promo_code}</code> даёт ещё +{vpn_promo_bonus_days} дня бонусом.\n\n"
+                    "Попробуйте — терять нечего 👇"
+                ),
+                reply_markup=kb,
+            )
+
+        elif cta_type == "vpn2":
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🚀 Попробовать NoctoVPN бесплатно", url="https://t.me/noctovpn_bot"),
+            ]])
+            await bot.send_message(
+                admin_id,
+                (
+                    "Всё ещё пользуетесь нашим прокси? 👍\n\n"
+                    "Напоминаем: для Instagram, YouTube и любых сайтов нужен <b>полный VPN</b> — прокси там не поможет.\n\n"
+                    "@noctovpn_bot:\n"
+                    "• Первые <b>1 сутки бесплатно</b>\n"
+                    "• Всего <b>179 ₽/мес</b>\n"
+                    f"• Промокод <code>{vpn_promo_code}</code> — ещё +{vpn_promo_bonus_days} дня = <b>4 дня бесплатно</b>\n\n"
+                    "Попробуйте прямо сейчас 👇"
+                ),
+                reply_markup=kb,
+            )
+
+        elif cta_type == "vpn3":
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🔥 Забрать 4 дня бесплатно", url="https://t.me/noctovpn_bot"),
+            ]])
+            await bot.send_message(
+                admin_id,
+                (
+                    "Последнее напоминание про VPN 🙏\n\n"
+                    f"Промокод <code>{vpn_promo_code}</code> в @noctovpn_bot даёт <b>{1 + vpn_promo_bonus_days} дня бесплатно</b>.\n"
+                    "После — <b>179 ₽/мес</b>. Если не понравится — просто не продлевайте.\n\n"
+                    "Это дешевле одной поездки на такси, а работает везде:\n"
+                    "Instagram, YouTube, любые сайты и приложения 🌍"
+                ),
+                reply_markup=kb,
+            )
+
+        elif cta_type == "channel":
+            if not channel_url:
+                await callback.answer("CHANNEL_URL не задан в .env", show_alert=True)
+                return
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="📣 Подписаться на канал", url=channel_url),
+            ]])
+            await bot.send_message(
+                admin_id,
+                (
+                    "💡 Знаете ли вы, что прокси-серверы иногда меняются?\n\n"
+                    "Чтобы не гадать «почему вдруг перестало работать» — подпишитесь на наш канал. "
+                    "Там мы сразу сообщаем о смене серверов, падениях и даём новые адреса.\n\n"
+                    "Одна подписка — и прокси всегда будет работать 👇"
+                ),
+                reply_markup=kb,
+                disable_web_page_preview=True,
+            )
+
+        else:
+            await callback.answer("Неизвестный тип", show_alert=True)
+            return
+
+        await callback.answer("✅ Сообщение отправлено — проверьте чат", show_alert=True)
+        return
+
     await callback.answer()
 
 
@@ -1305,7 +1734,142 @@ async def add_proxy_secret(
     await message.answer("Прокси добавлен.", reply_markup=build_admin_menu())
 
 
-@router.message(BroadcastForm.text)
+@router.message(EditProxyNameForm.name)
+async def edit_proxy_name(
+    message: Message,
+    state: FSMContext,
+    admin_ids: set[int],
+    proxy_store: ProxyStore,
+    bot: Bot,
+) -> None:
+    if not _is_admin(message.from_user.id, admin_ids):
+        return
+
+    new_name = (message.text or "").strip()
+    await _safe_delete_message(message)
+    data = await state.get_data()
+    idx = int(data.get("edit_proxy_idx", -1))
+
+    if not new_name:
+        await _edit_panel(
+            bot, state,
+            "Название не может быть пустым. Отправьте новое название:",
+            build_wizard_keyboard(f"admin:proxy:{idx}"),
+        )
+        return
+
+    proxies = proxy_store.load_all()
+    if idx < 0 or idx >= len(proxies):
+        await _edit_panel(bot, state, "Прокси не найден.", InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="⬅️ В меню", callback_data="admin:menu")]]
+        ))
+        await state.clear()
+        return
+
+    proxies[idx].name = new_name
+    proxy_store.save_all(proxies)
+
+    proxy = proxies[idx]
+    first_enabled_idx = next((i for i, p in enumerate(proxies) if p.enabled), -1)
+    is_main = (idx == first_enabled_idx)
+    await _edit_panel(bot, state, _proxy_card_text(idx, proxy, is_main), build_proxy_card_keyboard(idx, proxy, is_main))
+    await state.clear()
+
+
+@router.message(AddProxyFromLinkForm.link)
+async def add_proxy_from_link_step(
+    message: Message,
+    state: FSMContext,
+    admin_ids: set[int],
+    bot: Bot,
+) -> None:
+    if not _is_admin(message.from_user.id, admin_ids):
+        return
+
+    raw = (message.text or "").strip()
+    await _safe_delete_message(message)
+
+    parsed = _parse_proxy_link(raw)
+    if not parsed:
+        await _edit_panel(
+            bot, state,
+            "<b>Не удалось распознать ссылку.</b>\n\n"
+            "Ожидается формат:\n"
+            "<code>https://t.me/proxy?server=...&port=...&secret=...</code>\n\n"
+            "Попробуйте ещё раз:",
+            build_wizard_keyboard("admin:add"),
+        )
+        return
+
+    server, port, secret = parsed
+    await state.update_data(link_server=server, link_port=port, link_secret=secret)
+    await state.set_state(AddProxyFromLinkForm.name)
+    await _edit_panel(
+        bot, state,
+        f"<b>Ссылка принята ✅</b>\n\n"
+        f"• Сервер: <code>{server}</code>\n"
+        f"• Порт: <code>{port}</code>\n\n"
+        "Теперь отправьте название для этого прокси (например: <code>Сервер #1</code>):",
+        build_wizard_keyboard("admin:add"),
+    )
+
+
+@router.message(AddProxyFromLinkForm.name)
+async def add_proxy_from_link_name(
+    message: Message,
+    state: FSMContext,
+    admin_ids: set[int],
+    proxy_store: ProxyStore,
+    bot: Bot,
+) -> None:
+    if not _is_admin(message.from_user.id, admin_ids):
+        return
+
+    name = (message.text or "").strip()
+    await _safe_delete_message(message)
+
+    if not name:
+        data = await state.get_data()
+        server = data.get("link_server", "?")
+        port = data.get("link_port", "?")
+        await _edit_panel(
+            bot, state,
+            f"Название не может быть пустым.\n\nСервер: <code>{server}:{port}</code>\n\nОтправьте название:",
+            build_wizard_keyboard("admin:add"),
+        )
+        return
+
+    data = await state.get_data()
+    new_proxy = ProxyItem(
+        name=name,
+        server=str(data["link_server"]),
+        port=int(data["link_port"]),
+        secret=str(data["link_secret"]),
+        enabled=True,
+    )
+    proxies = proxy_store.load_all()
+    proxies.append(new_proxy)
+    proxy_store.save_all(proxies)
+
+    panel_chat_id = data.get("panel_chat_id")
+    panel_message_id = data.get("panel_message_id")
+    idx = len(proxies) - 1
+    first_enabled_idx = next((i for i, p in enumerate(proxies) if p.enabled), -1)
+    is_main = (idx == first_enabled_idx)
+    await state.clear()
+    if panel_chat_id and panel_message_id:
+        await bot.edit_message_text(
+            chat_id=panel_chat_id,
+            message_id=panel_message_id,
+            text=_proxy_card_text(idx, new_proxy, is_main),
+            reply_markup=build_proxy_card_keyboard(idx, new_proxy, is_main),
+            disable_web_page_preview=True,
+        )
+        return
+    await message.answer("Прокси добавлен.", reply_markup=build_admin_menu())
+
+
+@router.message(BroadcastForm.media)
 async def prepare_broadcast(
     message: Message,
     state: FSMContext,
@@ -1315,35 +1879,41 @@ async def prepare_broadcast(
     if not _is_admin(message.from_user.id, admin_ids):
         return
 
-    text = (message.html_text or message.text or "").strip()
+    photo_id: str | None = None
+    if message.photo:
+        photo_id = message.photo[-1].file_id
+        text = (message.caption or "").strip()
+    else:
+        text = (message.text or "").strip()
+
     await _safe_delete_message(message)
-    if not text:
+
+    if not text and not photo_id:
         await _edit_panel(
-            bot,
-            state,
-            "Текст пустой.\n\nРассылка\n\nОтправьте текст одним сообщением.",
+            bot, state,
+            "<b>Новая рассылка</b>\n\nТекст или фото не найдены. Отправьте текст или фото с подписью.",
             build_wizard_keyboard("admin:menu"),
         )
         return
 
-    await state.update_data(broadcast_text=text)
-    await state.set_state(BroadcastForm.buttons)
+    await state.update_data(broadcast_text=text, broadcast_photo_id=photo_id)
+    await state.set_state(BroadcastForm.confirm)
+
+    media_label = "📷 Фото" + (" + подпись" if text else "") if photo_id else "📝 Текст"
+    preview = _cut_text(text, 300) if text else "(без текста)"
     await _edit_panel(
-        bot,
-        state,
+        bot, state,
         (
-            "Рассылка\n\n"
-            "Шаг 2/2: отправьте кнопки (каждая с новой строки) в формате:\n"
-            "<code>Текст кнопки | URL</code>\n\n"
-            "Если кнопки не нужны, отправьте <code>нет</code>.\n"
-            "Спец-URL <code>share</code> создаст кнопку поделиться ботом."
+            f"<b>Предпросмотр рассылки</b>\n\n"
+            f"{media_label}:\n{preview}\n\n"
+            "Выберите действие:"
         ),
-        build_wizard_keyboard("admin:menu"),
+        build_broadcast_confirm_keyboard(),
     )
 
 
 @router.message(BroadcastForm.buttons)
-async def send_broadcast(
+async def receive_broadcast_buttons(
     message: Message,
     state: FSMContext,
     admin_ids: set[int],
@@ -1358,9 +1928,21 @@ async def send_broadcast(
     await _safe_delete_message(message)
     data = await state.get_data()
     text = str(data.get("broadcast_text", "")).strip()
-    if not text:
+    photo_id = data.get("broadcast_photo_id")
+    panel_chat_id = int(data.get("panel_chat_id") or 0)
+    panel_message_id = int(data.get("panel_message_id") or 0)
+
+    if not text and not photo_id:
         await state.clear()
-        await message.answer("Текст рассылки потерян. Запустите рассылку заново.", reply_markup=build_admin_menu())
+        try:
+            await bot.edit_message_text(
+                chat_id=panel_chat_id,
+                message_id=panel_message_id,
+                text="Данные рассылки потеряны. Запустите рассылку заново.",
+                reply_markup=build_admin_menu(),
+            )
+        except TelegramBadRequest:
+            pass
         return
 
     me = await bot.get_me()
@@ -1368,63 +1950,30 @@ async def send_broadcast(
     keyboard, parse_error = _parse_broadcast_buttons(raw_buttons, share_url)
     if parse_error:
         await _edit_panel(
-            bot,
-            state,
+            bot, state,
             (
-                "Ошибка в кнопках.\n"
-                f"{parse_error}\n\n"
+                f"<b>Ошибка в кнопках</b>\n{parse_error}\n\n"
                 "Формат: <code>Текст кнопки | URL</code>\n"
-                "Либо отправьте <code>нет</code>, чтобы сделать рассылку без кнопок."
+                "Или отправьте <code>нет</code>, чтобы отправить без кнопок."
             ),
             build_wizard_keyboard("admin:menu"),
         )
         return
 
-    await _edit_panel(bot, state, "Рассылка в процессе...", build_wizard_keyboard("admin:menu"))
+    await state.update_data(broadcast_buttons_raw=raw_buttons)
+    await state.set_state(BroadcastForm.confirm)
 
-    user_ids = await storage.get_all_user_ids()
-    success = 0
-    failed = 0
-    worker_count = max(1, int(broadcast_workers))
-    queue: asyncio.Queue[int | None] = asyncio.Queue()
-
-    for tg_id in user_ids:
-        queue.put_nowait(int(tg_id))
-    for _ in range(worker_count):
-        queue.put_nowait(None)
-
-    lock = asyncio.Lock()
-
-    async def worker() -> None:
-        nonlocal success, failed
-        while True:
-            tg_id = await queue.get()
-            if tg_id is None:
-                return
-            ok = await _send_broadcast_message(bot, tg_id, text, reply_markup=keyboard)
-            async with lock:
-                if ok:
-                    success += 1
-                else:
-                    failed += 1
-
-    await asyncio.gather(*(worker() for _ in range(worker_count)))
-
-    data = await state.get_data()
-    panel_chat_id = data.get("panel_chat_id")
-    panel_message_id = data.get("panel_message_id")
-    await state.clear()
-    if panel_chat_id and panel_message_id:
-        await bot.edit_message_text(
-            chat_id=panel_chat_id,
-            message_id=panel_message_id,
-            text=(
-                "Рассылка завершена.\n"
-                f"Получателей в базе: {len(user_ids)}\n"
-                f"Успешно отправлено: {success}\n"
-                f"Ошибок: {failed}"
-            ),
-            reply_markup=build_admin_menu(),
-        )
-        return
-    await message.answer("Рассылка завершена.", reply_markup=build_admin_menu())
+    has_buttons = keyboard is not None
+    media_label = "📷 Фото" + (" + подпись" if text else "") if photo_id else "📝 Текст"
+    if has_buttons:
+        media_label += " + кнопки ✅"
+    preview = _cut_text(text, 300) if text else "(без текста)"
+    await _edit_panel(
+        bot, state,
+        (
+            f"<b>Предпросмотр рассылки</b>\n\n"
+            f"{media_label}:\n{preview}\n\n"
+            "Выберите аудиторию:"
+        ),
+        build_broadcast_confirm_keyboard(),
+    )

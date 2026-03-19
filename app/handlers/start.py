@@ -18,6 +18,12 @@ VPN_BOT_URL = "https://t.me/noctovpn_bot"
 LOGGER = logging.getLogger(__name__)
 
 
+def _greet(first_name: str) -> str:
+    """Return 'Name, ' prefix or empty string if name is absent."""
+    name = (first_name or "").strip()
+    return f"{name}, " if name else ""
+
+
 # ---------------------------------------------------------------------------
 # Keyboard builders
 # ---------------------------------------------------------------------------
@@ -29,25 +35,27 @@ def build_start_keyboard(
     show_admin_panel: bool,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="Подключить прокси", url=proxy_url, style=ButtonStyle.SUCCESS)],
-        [InlineKeyboardButton(text="🚀 Попробовать VPN", url=VPN_BOT_URL)],
+        [InlineKeyboardButton(text="⚡ Подключить прокси", url=proxy_url, style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="🚀 Попробовать NoctoVPN бесплатно", url=VPN_BOT_URL, style=ButtonStyle.PRIMARY)],
+        [
+            InlineKeyboardButton(text="📡 Все серверы", callback_data="user:proxies"),
+            InlineKeyboardButton(text="📖 Как подключить", callback_data="user:instruction"),
+        ],
+        [
+            InlineKeyboardButton(text="ℹ️ О VPN", callback_data="user:vpn_info"),
+            InlineKeyboardButton(text="👥 Пригласить друга", callback_data="user:referral"),
+        ],
     ]
 
-    secondary_buttons: list[InlineKeyboardButton] = [
-        InlineKeyboardButton(text="📚 Все прокси", callback_data="user:proxies"),
-        InlineKeyboardButton(text="📤 Поделиться", callback_data="user:share"),
-        InlineKeyboardButton(text="ℹ️ О VPN", callback_data="user:vpn_info"),
-        InlineKeyboardButton(text="👥 Пригласить друга", callback_data="user:referral"),
-        InlineKeyboardButton(text="Инструкция", callback_data="user:instruction"),
-        InlineKeyboardButton(text="Поддержка", url=f"https://t.me/{support_username}"),
+    bottom: list[InlineKeyboardButton] = [
+        InlineKeyboardButton(text="💬 Поддержка", url=f"https://t.me/{support_username}"),
     ]
     if channel_url:
-        secondary_buttons.append(InlineKeyboardButton(text="📣 Подписаться на канал", url=channel_url))
-    if show_admin_panel:
-        secondary_buttons.append(InlineKeyboardButton(text="🛠 Админ панель", callback_data="admin:menu"))
+        bottom.append(InlineKeyboardButton(text="📣 Наш канал", url=channel_url))
+    rows.append(bottom)
 
-    for idx in range(0, len(secondary_buttons), 2):
-        rows.append(secondary_buttons[idx:idx + 2])
+    if show_admin_panel:
+        rows.append([InlineKeyboardButton(text="🛠 Панель", callback_data="admin:menu")])
 
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -63,15 +71,18 @@ def build_subscribe_gate_keyboard(channel_url: str) -> InlineKeyboardMarkup:
 
 def build_instruction_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="user:home")]]
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📡 Перейти к серверам", callback_data="user:proxies")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="user:home")],
+        ]
     )
 
 
 def build_vpn_info_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Открыть VPN-бот", url=VPN_BOT_URL)],
-            [InlineKeyboardButton(text="📋 Скопировать промокод", callback_data="user:vpn_promo")],
+            [InlineKeyboardButton(text="🚀 Попробовать бесплатно — 4 дня", url=VPN_BOT_URL)],
+            [InlineKeyboardButton(text="🎁 Получить промокод", callback_data="user:vpn_promo")],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="user:home")],
         ]
     )
@@ -79,12 +90,13 @@ def build_vpn_info_keyboard() -> InlineKeyboardMarkup:
 
 def build_proxy_list_keyboard(proxies: list[ProxyItem]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    for idx, proxy in enumerate(proxies):
+    for proxy in proxies:
         rows.append([InlineKeyboardButton(text=f"✅ Подключить {proxy.name}", url=proxy.tme_link)])
-        rows.append(
-            [InlineKeyboardButton(text=f"📋 Скопировать tg:// ({proxy.name})", callback_data=f"copy_tg:{idx}")]
-        )
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="user:home")])
+    rows.append([InlineKeyboardButton(text="🚀 NoctoVPN — открывает Instagram и YouTube", url=VPN_BOT_URL)])
+    rows.append([
+        InlineKeyboardButton(text="📖 Инструкция", callback_data="user:instruction"),
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="user:home"),
+    ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -109,10 +121,9 @@ def build_share_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def build_share_actions_keyboard(tme_link: str, tg_link: str) -> InlineKeyboardMarkup:
+def build_share_actions_keyboard(tme_link: str) -> InlineKeyboardMarkup:
     share_text = (
-        "Бесплатный Proxy для Telegram. "
-        "Работает только для Telegram (не VPN)."
+        "Бесплатный прокси для Telegram — подключается за 1 нажатие, без регистрации."
     )
     share_url = (
         f"https://t.me/share/url?url={quote(tme_link, safe='')}"
@@ -120,7 +131,7 @@ def build_share_actions_keyboard(tme_link: str, tg_link: str) -> InlineKeyboardM
     )
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📨 Отправить в чат", url=share_url)],
+            [InlineKeyboardButton(text="📨 Отправить другу", url=share_url)],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="user:home")],
         ]
     )
@@ -140,18 +151,23 @@ def build_channel_reminder_keyboard(channel_url: str) -> InlineKeyboardMarkup:
 
 def _main_menu_text() -> str:
     return (
-        "<b>Бесплатный Proxy для Telegram</b>\n\n"
-        "Прокси работает <b>только внутри Telegram</b> — другие приложения и сайты он не разблокирует.\n"
-        "Если нужен полноценный VPN для Instagram, YouTube и любых сайтов — нажмите «🚀 Попробовать VPN».\n\n"
-        "Выберите действие:"
+        "🔒 <b>Бесплатный прокси для Telegram</b>\n\n"
+        "Нажмите <b>«⚡ Подключить прокси»</b> — Telegram сам добавит сервер за один шаг.\n\n"
+        "📌 <b>Instagram и YouTube всё равно не работают?</b>\n"
+        "Прокси — только для Telegram. Для всего остального нужен VPN.\n"
+        "Попробуйте NoctoVPN — первые сутки <b>бесплатно</b> 👆"
     )
 
 
 def _subscribe_gate_text() -> str:
     return (
-        "Прокси бесплатный, но чтобы получить доступ — нужно подписаться на наш канал.\n\n"
-        "Там публикуем обновления серверов, новости про блокировки и статусы работы прокси — "
-        "так вы всегда будете в курсе."
+        "👋 Привет!\n\n"
+        "Прокси бесплатный — чтобы получить доступ, подпишитесь на наш канал.\n\n"
+        "Это займёт 5 секунд, а взамен вы получаете:\n"
+        "• 🔔 Оповещение, если сервер упал — не будете гадать почему не работает\n"
+        "• 🆕 Новые прокси раньше всех\n"
+        "• 📡 Статус серверов в реальном времени\n\n"
+        "Подписались? Нажмите кнопку ниже 👇"
     )
 
 
@@ -187,23 +203,25 @@ async def _send_vpn_promo(
     vpn_promo_code: str,
     vpn_promo_bonus_days: int,
     delay_seconds: int,
+    first_name: str = "",
 ) -> None:
     await asyncio.sleep(delay_seconds)
+    g = _greet(first_name)
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Попробовать VPN бесплатно", url=VPN_BOT_URL)],
+            [InlineKeyboardButton(text="🚀 Попробовать VPN — 1 день бесплатно", url=VPN_BOT_URL)],
         ]
     )
     try:
         await bot.send_message(
             tg_id,
             (
-                "Кстати, у нас есть <b>VPN</b> — он работает не только в Telegram, "
-                "но и в Instagram, YouTube и любых других приложениях.\n\n"
-                "Первые <b>1 сутки бесплатно</b>, никакого риска.\n"
-                f"С промокодом <code>{vpn_promo_code}</code> — бонус ещё +{vpn_promo_bonus_days} дня.\n"
-                "Потом всего <b>179 ₽/мес</b>.\n\n"
-                "Попробуйте — вдруг понравится 😉"
+                f"{g}Instagram, YouTube у вас открываются? 🤔\n\n"
+                "Прокси работает <b>только внутри Telegram</b>. "
+                "Для всех остальных приложений и сайтов нужен VPN.\n\n"
+                "У нас есть @noctovpn_bot — первые <b>1 сутки бесплатно</b>, без карты.\n"
+                f"Промокод <code>{vpn_promo_code}</code> даёт ещё +{vpn_promo_bonus_days} дня бонусом.\n\n"
+                "Попробуйте — терять нечего 👇"
             ),
             reply_markup=keyboard,
         )
@@ -217,23 +235,26 @@ async def _send_vpn_promo_final(
     vpn_promo_code: str,
     vpn_promo_bonus_days: int,
     delay_seconds: int,
+    first_name: str = "",
 ) -> None:
     await asyncio.sleep(delay_seconds)
+    g = _greet(first_name)
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Попробовать VPN — 1 сутки бесплатно", url=VPN_BOT_URL)],
+            [InlineKeyboardButton(text="🚀 Попробовать NoctoVPN бесплатно", url=VPN_BOT_URL)],
         ]
     )
     try:
         await bot.send_message(
             tg_id,
             (
-                "Прокси работает? Надеемся, что да 👍\n\n"
-                "Напоминаем: если нужен <b>полный VPN</b> для всех приложений и сайтов — "
-                "Instagram, YouTube, любые сервисы — у нас есть @noctovpn_bot.\n\n"
-                "Триал <b>1 сутки бесплатно</b>. "
-                f"Промокод <code>{vpn_promo_code}</code> даёт ещё +{vpn_promo_bonus_days} дня.\n"
-                "Цена после триала — <b>179 ₽/мес</b>."
+                f"{g}всё ещё пользуетесь нашим прокси? 👍\n\n"
+                "Напоминаем: для Instagram, YouTube и любых сайтов нужен <b>полный VPN</b> — прокси там не поможет.\n\n"
+                "@noctovpn_bot:\n"
+                "• Первые <b>1 сутки бесплатно</b>\n"
+                "• Всего <b>179 ₽/мес</b>\n"
+                f"• Промокод <code>{vpn_promo_code}</code> — ещё +{vpn_promo_bonus_days} дня = <b>4 дня бесплатно</b>\n\n"
+                "Попробуйте прямо сейчас 👇"
             ),
             reply_markup=keyboard,
         )
@@ -241,28 +262,86 @@ async def _send_vpn_promo_final(
         LOGGER.exception("Failed to send final VPN promo to user %s", tg_id)
 
 
+async def _send_vpn_promo_dojim(
+    bot: Bot,
+    tg_id: int,
+    vpn_promo_code: str,
+    vpn_promo_bonus_days: int,
+    delay_seconds: int,
+    first_name: str = "",
+) -> None:
+    await asyncio.sleep(delay_seconds)
+    g = _greet(first_name)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔥 Забрать 4 дня бесплатно", url=VPN_BOT_URL)],
+        ]
+    )
+    try:
+        await bot.send_message(
+            tg_id,
+            (
+                f"{g}последнее напоминание про VPN 🙏\n\n"
+                f"Промокод <code>{vpn_promo_code}</code> в @noctovpn_bot даёт <b>{1 + vpn_promo_bonus_days} дня бесплатно</b>.\n"
+                "После — <b>179 ₽/мес</b>. Если не понравится — просто не продлевайте.\n\n"
+                "Это дешевле одной поездки на такси, а работает везде:\n"
+                "Instagram, YouTube, любые сайты и приложения 🌍"
+            ),
+            reply_markup=keyboard,
+        )
+    except Exception:
+        LOGGER.exception("Failed to send dojim VPN promo to user %s", tg_id)
+
+
 async def _send_channel_reminder(
     bot: Bot,
     tg_id: int,
     channel_url: str,
     delay_seconds: int,
+    first_name: str = "",
 ) -> None:
     await asyncio.sleep(delay_seconds)
+    g = _greet(first_name)
     try:
         await bot.send_message(
             tg_id,
             (
-                "💡 У нас есть канал — там публикуем:\n"
-                "• статус серверов если что-то упало\n"
-                "• новые прокси когда добавляем\n"
-                "• новости о блокировках\n\n"
-                "Подпишитесь, чтобы всегда знать актуальное состояние прокси 👇"
+                f"💡 {g}прокси-серверы иногда меняются.\n\n"
+                "Чтобы не гадать «почему вдруг перестало работать» — подпишитесь на наш канал. "
+                "Там мы сразу сообщаем о смене серверов, падениях и даём новые адреса.\n\n"
+                "Одна подписка — и прокси всегда будет работать 👇"
             ),
             reply_markup=build_channel_reminder_keyboard(channel_url),
             disable_web_page_preview=True,
         )
     except Exception:
         LOGGER.exception("Failed to send channel reminder to user %s", tg_id)
+
+
+async def _send_connection_check(
+    bot: Bot,
+    tg_id: int,
+    first_name: str,
+    delay_seconds: int,
+) -> None:
+    await asyncio.sleep(delay_seconds)
+    g = _greet(first_name)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да, работает!", callback_data="user:proxy_ok"),
+                InlineKeyboardButton(text="❌ Не работает", callback_data="user:proxy_fail"),
+            ]
+        ]
+    )
+    try:
+        await bot.send_message(
+            tg_id,
+            f"🔌 {g}прокси уже подключили?\n\nTelegram работает нормально?",
+            reply_markup=keyboard,
+        )
+    except Exception:
+        LOGGER.exception("Failed to send connection check to user %s", tg_id)
 
 
 # ---------------------------------------------------------------------------
@@ -303,10 +382,13 @@ async def cmd_start(
     channel_reminder_delay_sec: int,
     vpn_onboarding_delay_sec: int,
     vpn_onboarding_final_delay_sec: int,
+    vpn_onboarding_dojim_delay_sec: int,
+    connection_check_delay_sec: int,
     vpn_promo_code: str,
     vpn_promo_bonus_days: int,
 ) -> None:
     user = message.from_user
+    first_name = user.first_name or ""
     is_new_user = await storage.touch_user(
         tg_id=user.id,
         username=user.username,
@@ -326,15 +408,21 @@ async def cmd_start(
 
     # Proxy unavailable
     if not enabled:
-        support_url = f"https://t.me/{support_username}"
         unavail_text = (
-            "Привет! 👋\n\n"
-            "Прокси сейчас временно недоступен — мы уже в курсе и работаем над этим.\n"
-            f"Если вопрос срочный, напишите в поддержку: {support_url}"
+            "⚠️ <b>Прокси временно недоступен</b>\n\n"
+            "Мы уже в курсе и работаем над этим. Обычно это занимает не больше нескольких минут."
         )
+        unavail_kb_rows: list[list[InlineKeyboardButton]] = [
+            [InlineKeyboardButton(text="💬 Написать в поддержку", url=f"https://t.me/{support_username}")],
+        ]
         if channel_url:
-            unavail_text += f"\n\nСледите за статусом в нашем канале: {channel_url}"
-        await message.answer(unavail_text, disable_web_page_preview=True)
+            unavail_kb_rows.append(
+                [InlineKeyboardButton(text="📣 Статус в нашем канале", url=channel_url)]
+            )
+        await message.answer(
+            unavail_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=unavail_kb_rows),
+        )
         return
 
     # Subscribe-gate (only when CHANNEL_ID is configured)
@@ -353,6 +441,7 @@ async def cmd_start(
                             message.bot, user.id,
                             vpn_promo_code, vpn_promo_bonus_days,
                             vpn_onboarding_delay_sec,
+                            first_name=first_name,
                         )
                     )
                 if vpn_onboarding_final_delay_sec > 0:
@@ -361,6 +450,16 @@ async def cmd_start(
                             message.bot, user.id,
                             vpn_promo_code, vpn_promo_bonus_days,
                             vpn_onboarding_final_delay_sec,
+                            first_name=first_name,
+                        )
+                    )
+                if vpn_onboarding_dojim_delay_sec > 0:
+                    asyncio.create_task(
+                        _send_vpn_promo_dojim(
+                            message.bot, user.id,
+                            vpn_promo_code, vpn_promo_bonus_days,
+                            vpn_onboarding_dojim_delay_sec,
+                            first_name=first_name,
                         )
                     )
             return
@@ -377,6 +476,14 @@ async def cmd_start(
 
     # Onboarding for new users
     if is_new_user:
+        # Connection check — fires after a short delay to ask if proxy worked
+        if connection_check_delay_sec > 0:
+            asyncio.create_task(
+                _send_connection_check(
+                    message.bot, user.id, first_name, connection_check_delay_sec,
+                )
+            )
+
         # Channel promotion — only without gate (with gate they already subscribed)
         if channel_url and not channel_id:
             await message.answer(
@@ -392,6 +499,7 @@ async def cmd_start(
                 asyncio.create_task(
                     _send_channel_reminder(
                         message.bot, user.id, channel_url, channel_reminder_delay_sec,
+                        first_name=first_name,
                     )
                 )
 
@@ -402,6 +510,7 @@ async def cmd_start(
                     message.bot, user.id,
                     vpn_promo_code, vpn_promo_bonus_days,
                     vpn_onboarding_delay_sec,
+                    first_name=first_name,
                 )
             )
         if vpn_onboarding_final_delay_sec > 0:
@@ -410,6 +519,16 @@ async def cmd_start(
                     message.bot, user.id,
                     vpn_promo_code, vpn_promo_bonus_days,
                     vpn_onboarding_final_delay_sec,
+                    first_name=first_name,
+                )
+            )
+        if vpn_onboarding_dojim_delay_sec > 0:
+            asyncio.create_task(
+                _send_vpn_promo_dojim(
+                    message.bot, user.id,
+                    vpn_promo_code, vpn_promo_bonus_days,
+                    vpn_onboarding_dojim_delay_sec,
+                    first_name=first_name,
                 )
             )
 
@@ -452,11 +571,12 @@ async def cb_user_home(
 
     enabled = proxy_store.load_enabled()
     if not enabled:
-        support_url = f"https://t.me/{support_username}"
         await _safe_edit(
             callback,
-            "Сейчас прокси временно недоступен.\n"
-            f"Поддержка: {support_url}",
+            "⚠️ <b>Прокси временно недоступен</b>\n\nМы уже в курсе и работаем над этим.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="💬 Поддержка", url=f"https://t.me/{support_username}"),
+            ]]),
         )
         await callback.answer()
         return
@@ -546,15 +666,17 @@ async def cb_instruction(
     )
 
     text = (
-        "<b>Как подключить прокси</b>\n\n"
-        "1. Нажмите кнопку <b>Подключить</b> у нужного сервера.\n"
-        "2. Telegram откроет экран добавления прокси.\n"
-        "3. Подтвердите добавление и включите <b>Использовать прокси</b>.\n"
-        "4. Рекомендуем включить <b>Автопереключение</b> в том же разделе.\n\n"
-        f"<b>Поддержка:</b> https://t.me/{support_username}"
+        "📖 <b>Как подключить прокси</b>\n\n"
+        "1. Нажмите кнопку <b>«⚡ Подключить»</b> у нужного сервера\n"
+        "2. Telegram откроет экран — нажмите <b>«Включить»</b>\n"
+        "3. Убедитесь что переключатель <b>«Использовать этот прокси»</b> активен ✅\n\n"
+        "💡 <b>Совет:</b> добавьте все серверы из списка и включите "
+        "<b>«Автопереключение»</b> — тогда при падении одного сервера "
+        "Telegram сам перейдёт на следующий.\n\n"
+        f"Если что-то не работает — <a href=\"https://t.me/{support_username}\">напишите в поддержку</a>"
     )
     if channel_url:
-        text += f"\n\n<b>Актуальные серверы и статусы — в нашем канале:</b> {channel_url}"
+        text += f"\n\n📣 Актуальные серверы и статусы: <a href=\"{channel_url}\">наш канал</a>"
     await _safe_edit(callback, text, reply_markup=build_instruction_keyboard(), disable_web_page_preview=True)
     await callback.answer()
 
@@ -574,15 +696,15 @@ async def cb_vpn_info(
     )
 
     text = (
-        "<b>NoctoVPN — быстрый VPN для всего</b>\n\n"
-        "В отличие от прокси, VPN работает во <b>всех приложениях и браузерах</b>:\n"
-        "Instagram, YouTube, любые сайты и сервисы — всё без ограничений.\n\n"
-        "• <b>179 ₽ / месяц</b>\n"
-        "• <b>1 сутки</b> — бесплатный пробный период, без риска\n"
-        "• Серверы до <b>10 Gbit</b>\n\n"
-        f"<b>Промокод:</b> <code>{vpn_promo_code}</code>\n"
-        f"Даёт +{vpn_promo_bonus_days} дня к пробному периоду — итого <b>4 дня бесплатно</b>.\n\n"
-        "Попробуйте 1 сутки бесплатно — нажмите кнопку ниже."
+        "🚀 <b>NoctoVPN — открывает Instagram, YouTube и всё остальное</b>\n\n"
+        "Прокси работает только внутри Telegram. VPN — <b>на всех сайтах и приложениях</b> сразу.\n\n"
+        "✅ Instagram, YouTube, TikTok\n"
+        "✅ Любые сайты и приложения\n"
+        "✅ На телефоне и компьютере\n"
+        "✅ Скорость до <b>10 Гбит/с</b>\n\n"
+        f"💸 Всего <b>179 ₽/мес</b> — дешевле одной поездки в метро.\n\n"
+        f"🎁 Промокод <code>{vpn_promo_code}</code> даёт <b>{1 + vpn_promo_bonus_days} дня бесплатно</b> — без карты, без риска.\n\n"
+        "Попробуйте прямо сейчас — ничего не теряете 👇"
     )
     await _safe_edit(callback, text, reply_markup=build_vpn_info_keyboard())
     await callback.answer()
@@ -630,20 +752,22 @@ async def cb_user_proxies(
     if not proxies:
         await _safe_edit(
             callback,
-            "Сейчас прокси временно недоступен.\n"
-            f"Поддержка: https://t.me/{support_username}",
-            reply_markup=build_instruction_keyboard(),
+            "⚠️ <b>Прокси временно недоступен</b>\n\nМы уже в курсе и работаем над этим.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💬 Поддержка", url=f"https://t.me/{support_username}")],
+                [InlineKeyboardButton(text="⬅️ Назад", callback_data="user:home")],
+            ]),
         )
         await callback.answer()
         return
 
     lines = [
-        "<b>Доступные прокси для Telegram</b>",
-        "Добавьте несколько серверов и включите автопереключение в Telegram.",
-        "",
+        "🔒 <b>Прокси для Telegram</b>\n",
+        "Добавьте <b>все серверы</b> сразу и включите <b>автопереключение</b> — если один упадёт, Telegram сам переключится на следующий.\n",
+        "<b>Доступные серверы:</b>",
     ]
     for idx, proxy in enumerate(proxies):
-        lines.append(f"{idx + 1}. <b>{proxy.name}</b> | <code>{proxy.server}:{proxy.port}</code>")
+        lines.append(f"{idx + 1}. <b>{proxy.name}</b>  <code>{proxy.server}:{proxy.port}</code>")
     await _safe_edit(callback, "\n".join(lines), reply_markup=build_proxy_list_keyboard(proxies))
     await callback.answer()
 
@@ -704,19 +828,16 @@ async def cb_user_share(
 
     proxy = proxies[0]
     await storage.record_share(user.id, source="cb_share")
-    tg_link = proxy.tg_link
     tme_link = proxy.tme_link
     text = (
-        "<b>Поделитесь этим прокси:</b>\n"
-        "Бесплатный Proxy для Telegram.\n\n"
-        f"<b>tg:// ссылка:</b> {tg_link}\n"
-        f"<b>Подключить в 1 тап:</b> {tme_link}\n\n"
-        "<i>Нужен VPN для всех сайтов и приложений? → @noctovpn_bot</i>"
+        "📤 <b>Поделитесь прокси с друзьями</b>\n\n"
+        "Друг получит ссылку и подключится за одно нажатие — без регистрации и настроек.\n\n"
+        "<i>Нужен VPN для всех сайтов? → @noctovpn_bot</i>"
     )
     await _safe_edit(
         callback,
         text,
-        reply_markup=build_share_actions_keyboard(tme_link, tg_link),
+        reply_markup=build_share_actions_keyboard(tme_link),
         disable_web_page_preview=True,
     )
     await callback.answer()
@@ -738,11 +859,10 @@ async def _get_referral_text_and_keyboard(
         f"&text={quote(share_text, safe='')}"
     )
     text = (
-        "<b>Пригласить друга</b>\n\n"
-        "Приглашай друзей — помогай проекту расти 💪\n\n"
-        "Отправьте эту ссылку друзьям — они получат бесплатный прокси для Telegram:\n\n"
+        "👥 <b>Пригласить друга</b>\n\n"
+        "Отправьте ссылку другу — он получит бесплатный прокси за одно нажатие:\n\n"
         f"<code>{ref_link}</code>\n\n"
-        f"Вы уже пригласили: <b>{ref_count}</b> чел."
+        f"Приглашено друзей: <b>{ref_count}</b>"
     )
     keyboard = build_referral_keyboard(share_url)
     return text, keyboard
@@ -780,4 +900,71 @@ async def cb_user_referral(
     ref_count = await storage.count_referrals(user.id)
     text, keyboard = await _get_referral_text_and_keyboard(callback.bot, user.id, ref_count, channel_url)
     await _safe_edit(callback, text, reply_markup=keyboard, disable_web_page_preview=True)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "user:proxy_ok")
+async def cb_proxy_ok(
+    callback: CallbackQuery,
+    storage: Storage,
+    channel_url: str | None,
+    vpn_promo_code: str,
+) -> None:
+    user = callback.from_user
+    await storage.set_user_proxy_connected(user.id, connected=True)
+
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
+
+    me = await callback.bot.get_me()
+    ref_link = f"https://t.me/{me.username}?start=ref_{user.id}"
+    share_text = "Бесплатный MTProto прокси для Telegram — подключается за одно нажатие."
+    share_url = (
+        f"https://t.me/share/url?url={quote(ref_link, safe='')}"
+        f"&text={quote(share_text, safe='')}"
+    )
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="🚀 Попробовать NoctoVPN бесплатно", url=VPN_BOT_URL)],
+        [InlineKeyboardButton(text="📤 Поделиться прокси с другом", url=share_url)],
+    ]
+    if channel_url:
+        rows.append([InlineKeyboardButton(text="📣 Подписаться на наш канал", url=channel_url)])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
+
+    g = _greet(user.first_name or "")
+    await callback.message.answer(
+        f"🎉 {g}отлично, прокси работает!\n\n"
+        "Раз Telegram открывается — Instagram и YouTube тоже хотите?\n"
+        f"@noctovpn_bot даёт <b>1 день бесплатно</b>, промокод <code>{vpn_promo_code}</code> — ещё +3 дня.\n"
+        "Итого <b>4 дня бесплатно</b>, без карты 👆",
+        reply_markup=keyboard,
+    )
+    await callback.answer("Отлично! 🎉")
+
+
+@router.callback_query(F.data == "user:proxy_fail")
+async def cb_proxy_fail(
+    callback: CallbackQuery,
+    storage: Storage,
+    support_username: str,
+) -> None:
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📖 Инструкция", callback_data="user:instruction")],
+            [InlineKeyboardButton(text="💬 Написать в поддержку", url=f"https://t.me/{support_username}")],
+        ]
+    )
+    await callback.message.answer(
+        "Жаль, разберёмся 🛠\n\n"
+        "Попробуйте инструкцию — там по шагам показано как подключить. "
+        "Если не поможет — напишите в поддержку, поможем быстро.",
+        reply_markup=keyboard,
+    )
     await callback.answer()

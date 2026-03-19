@@ -19,14 +19,8 @@ LOGGER = logging.getLogger(__name__)
 def build_proxy_keyboard(index: int, name: str, tme_link: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=f"✅ Подключить {name}", url=tme_link)],
-            [
-                InlineKeyboardButton(
-                    text=f"📋 Скопировать tg:// ({name})",
-                    callback_data=f"copy_tg:{index}",
-                )
-            ],
-            [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="user:home")],
+            [InlineKeyboardButton(text=f"⚡ Подключить {name}", url=tme_link)],
+            [InlineKeyboardButton(text="⬅️ В меню", callback_data="user:home")],
         ]
     )
 
@@ -72,17 +66,16 @@ async def cmd_proxy(
             return
 
     intro = (
-        "<b>Доступные прокси для Telegram</b>\n"
-        "Рекомендуется добавить несколько серверов и включить автопереключение."
+        "🔒 <b>Прокси для Telegram</b>\n\n"
+        "Добавьте <b>все серверы</b> и включите <b>автопереключение</b> — "
+        "если один упадёт, Telegram сам перейдёт на следующий."
     )
     await message.answer(intro)
 
     for idx, proxy in enumerate(proxies):
         text = (
             f"<b>{idx + 1}. {proxy.name}</b>\n"
-            f"<b>server:</b> <code>{proxy.server}</code>\n"
-            f"<b>port:</b> <code>{proxy.port}</code>\n"
-            f"<b>secret:</b> <code>{proxy.secret}</code>"
+            f"<code>{proxy.server}:{proxy.port}</code>"
         )
         keyboard = build_proxy_keyboard(idx, proxy.name, proxy.tme_link)
         await message.answer(text, reply_markup=keyboard)
