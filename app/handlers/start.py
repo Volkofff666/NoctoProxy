@@ -14,7 +14,7 @@ from app.services.proxy_links import ProxyItem, ProxyStore
 from app.services.storage import Storage
 
 router = Router()
-VPN_BOT_URL = "https://t.me/noctovpn_bot"
+VPN_BOT_URL = "https://t.me/noctovpn_bot?start=pxbt"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -81,8 +81,8 @@ def build_instruction_keyboard() -> InlineKeyboardMarkup:
 def build_vpn_info_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Попробовать бесплатно — 4 дня", url=VPN_BOT_URL)],
-            [InlineKeyboardButton(text="🎁 Получить промокод", callback_data="user:vpn_promo")],
+            [InlineKeyboardButton(text="🚀 Попробовать бесплатно — 3 дня", url=VPN_BOT_URL)],
+            [InlineKeyboardButton(text="🎁 Получить 3 дня бесплатно", callback_data="user:vpn_promo")],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="user:home")],
         ]
     )
@@ -155,7 +155,7 @@ def _main_menu_text() -> str:
         "Нажмите <b>«⚡ Подключить прокси»</b> — Telegram сам добавит сервер за один шаг.\n\n"
         "📌 <b>Instagram и YouTube всё равно не работают?</b>\n"
         "Прокси — только для Telegram. Для всего остального нужен VPN.\n"
-        "Попробуйте NoctoVPN — первые сутки <b>бесплатно</b> 👆"
+        "Попробуйте NoctoVPN — <b>3 дня бесплатно</b> 👆"
     )
 
 
@@ -209,7 +209,7 @@ async def _send_vpn_promo(
     g = _greet(first_name)
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Попробовать VPN — 1 день бесплатно", url=VPN_BOT_URL)],
+            [InlineKeyboardButton(text="🚀 Попробовать VPN — 3 дня бесплатно", url=VPN_BOT_URL)],
         ]
     )
     try:
@@ -219,8 +219,7 @@ async def _send_vpn_promo(
                 f"{g}Instagram, YouTube у вас открываются? 🤔\n\n"
                 "Прокси работает <b>только внутри Telegram</b>. "
                 "Для всех остальных приложений и сайтов нужен VPN.\n\n"
-                "У нас есть @noctovpn_bot — первые <b>1 сутки бесплатно</b>, без карты.\n"
-                f"Промокод <code>{vpn_promo_code}</code> даёт ещё +{vpn_promo_bonus_days} дня бонусом.\n\n"
+                "У нас есть @noctovpn_bot — по ссылке дадут <b>3 дня доступа бесплатно</b>, без карты.\n\n"
                 "Попробуйте — терять нечего 👇"
             ),
             reply_markup=keyboard,
@@ -251,9 +250,9 @@ async def _send_vpn_promo_final(
                 f"{g}всё ещё пользуетесь нашим прокси? 👍\n\n"
                 "Напоминаем: для Instagram, YouTube и любых сайтов нужен <b>полный VPN</b> — прокси там не поможет.\n\n"
                 "@noctovpn_bot:\n"
-                "• Первые <b>1 сутки бесплатно</b>\n"
+                "• <b>3 дня доступа бесплатно</b>\n"
                 "• Всего <b>179 ₽/мес</b>\n"
-                f"• Промокод <code>{vpn_promo_code}</code> — ещё +{vpn_promo_bonus_days} дня = <b>4 дня бесплатно</b>\n\n"
+                "• Без карты и лишней регистрации\n\n"
                 "Попробуйте прямо сейчас 👇"
             ),
             reply_markup=keyboard,
@@ -274,7 +273,7 @@ async def _send_vpn_promo_dojim(
     g = _greet(first_name)
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🔥 Забрать 4 дня бесплатно", url=VPN_BOT_URL)],
+            [InlineKeyboardButton(text="🔥 Забрать 3 дня бесплатно", url=VPN_BOT_URL)],
         ]
     )
     try:
@@ -282,7 +281,7 @@ async def _send_vpn_promo_dojim(
             tg_id,
             (
                 f"{g}последнее напоминание про VPN 🙏\n\n"
-                f"Промокод <code>{vpn_promo_code}</code> в @noctovpn_bot даёт <b>{1 + vpn_promo_bonus_days} дня бесплатно</b>.\n"
+                "@noctovpn_bot по ссылке даёт <b>3 дня доступа бесплатно</b>.\n"
                 "После — <b>179 ₽/мес</b>. Если не понравится — просто не продлевайте.\n\n"
                 "Это дешевле одной поездки на такси, а работает везде:\n"
                 "Instagram, YouTube, любые сайты и приложения 🌍"
@@ -703,7 +702,7 @@ async def cb_vpn_info(
         "✅ На телефоне и компьютере\n"
         "✅ Скорость до <b>10 Гбит/с</b>\n\n"
         f"💸 Всего <b>179 ₽/мес</b> — дешевле одной поездки в метро.\n\n"
-        f"🎁 Промокод <code>{vpn_promo_code}</code> даёт <b>{1 + vpn_promo_bonus_days} дня бесплатно</b> — без карты, без риска.\n\n"
+        "🎁 По ссылке получите <b>3 дня доступа бесплатно</b> — без карты, без риска.\n\n"
         "Попробуйте прямо сейчас — ничего не теряете 👇"
     )
     await _safe_edit(callback, text, reply_markup=build_vpn_info_keyboard())
@@ -726,12 +725,16 @@ async def cb_vpn_promo(
 
     await callback.message.answer(
         (
-            "<b>Ваш промокод для VPN:</b>\n"
-            f"<code>{vpn_promo_code}</code>\n\n"
-            f"Бонус: +{vpn_promo_bonus_days} дня к пробной подписке."
-        )
+            "<b>Ваши 3 дня VPN бесплатно:</b>\n"
+            f"{VPN_BOT_URL}\n\n"
+            "Откройте ссылку и запустите бота."
+        ),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="🚀 Открыть NoctoVPN", url=VPN_BOT_URL)]]
+        ),
+        disable_web_page_preview=True,
     )
-    await callback.answer("Промокод отправлен")
+    await callback.answer("Ссылка отправлена")
 
 
 @router.callback_query(F.data == "user:proxies")
@@ -937,8 +940,7 @@ async def cb_proxy_ok(
     await callback.message.answer(
         f"🎉 {g}отлично, прокси работает!\n\n"
         "Раз Telegram открывается — Instagram и YouTube тоже хотите?\n"
-        f"@noctovpn_bot даёт <b>1 день бесплатно</b>, промокод <code>{vpn_promo_code}</code> — ещё +3 дня.\n"
-        "Итого <b>4 дня бесплатно</b>, без карты 👆",
+        "@noctovpn_bot по ссылке даёт <b>3 дня доступа бесплатно</b>, без карты 👆",
         reply_markup=keyboard,
     )
     await callback.answer("Отлично! 🎉")

@@ -20,6 +20,7 @@ from app.services.storage import Storage
 
 router = Router()
 USERS_PAGE_SIZE = 10
+VPN_BOT_URL = "https://t.me/noctovpn_bot?start=pxbt"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -1337,7 +1338,7 @@ async def cb_admin_actions(
 
         if cta_type == "vpn1":
             kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="🚀 Попробовать VPN — 1 день бесплатно", url="https://t.me/noctovpn_bot"),
+                InlineKeyboardButton(text="🚀 Попробовать VPN — 3 дня бесплатно", url=VPN_BOT_URL),
             ]])
             await bot.send_message(
                 admin_id,
@@ -1345,8 +1346,7 @@ async def cb_admin_actions(
                     "Кстати — Instagram, YouTube у вас открываются? 🤔\n\n"
                     "Прокси работает <b>только внутри Telegram</b>. "
                     "Для всех остальных приложений и сайтов нужен VPN.\n\n"
-                    "У нас есть @noctovpn_bot — первые <b>1 сутки бесплатно</b>, без карты.\n"
-                    f"Промокод <code>{vpn_promo_code}</code> даёт ещё +{vpn_promo_bonus_days} дня бонусом.\n\n"
+                    "У нас есть @noctovpn_bot — по ссылке дадут <b>3 дня доступа бесплатно</b>, без карты.\n\n"
                     "Попробуйте — терять нечего 👇"
                 ),
                 reply_markup=kb,
@@ -1354,7 +1354,7 @@ async def cb_admin_actions(
 
         elif cta_type == "vpn2":
             kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="🚀 Попробовать NoctoVPN бесплатно", url="https://t.me/noctovpn_bot"),
+                InlineKeyboardButton(text="🚀 Попробовать NoctoVPN бесплатно", url=VPN_BOT_URL),
             ]])
             await bot.send_message(
                 admin_id,
@@ -1362,9 +1362,9 @@ async def cb_admin_actions(
                     "Всё ещё пользуетесь нашим прокси? 👍\n\n"
                     "Напоминаем: для Instagram, YouTube и любых сайтов нужен <b>полный VPN</b> — прокси там не поможет.\n\n"
                     "@noctovpn_bot:\n"
-                    "• Первые <b>1 сутки бесплатно</b>\n"
+                    "• <b>3 дня доступа бесплатно</b>\n"
                     "• Всего <b>179 ₽/мес</b>\n"
-                    f"• Промокод <code>{vpn_promo_code}</code> — ещё +{vpn_promo_bonus_days} дня = <b>4 дня бесплатно</b>\n\n"
+                    "• Без карты и лишней регистрации\n\n"
                     "Попробуйте прямо сейчас 👇"
                 ),
                 reply_markup=kb,
@@ -1372,13 +1372,13 @@ async def cb_admin_actions(
 
         elif cta_type == "vpn3":
             kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="🔥 Забрать 4 дня бесплатно", url="https://t.me/noctovpn_bot"),
+                InlineKeyboardButton(text="🔥 Забрать 3 дня бесплатно", url=VPN_BOT_URL),
             ]])
             await bot.send_message(
                 admin_id,
                 (
                     "Последнее напоминание про VPN 🙏\n\n"
-                    f"Промокод <code>{vpn_promo_code}</code> в @noctovpn_bot даёт <b>{1 + vpn_promo_bonus_days} дня бесплатно</b>.\n"
+                    "@noctovpn_bot по ссылке даёт <b>3 дня доступа бесплатно</b>.\n"
                     "После — <b>179 ₽/мес</b>. Если не понравится — просто не продлевайте.\n\n"
                     "Это дешевле одной поездки на такси, а работает везде:\n"
                     "Instagram, YouTube, любые сайты и приложения 🌍"
