@@ -365,7 +365,20 @@ async def _safe_edit(
             disable_web_page_preview=disable_web_page_preview,
         )
     except TelegramBadRequest as exc:
-        if "message is not modified" not in str(exc):
+        err = str(exc)
+        if "message is not modified" in err:
+            return
+        if "there is no text in the message to edit" in err:
+            try:
+                await callback.message.delete()
+            except TelegramBadRequest:
+                pass
+            await callback.message.answer(
+                text,
+                reply_markup=reply_markup,
+                disable_web_page_preview=disable_web_page_preview,
+            )
+        else:
             raise
 
 
@@ -879,7 +892,7 @@ async def cb_user_qr(
     proxy = proxies[idx]
 
     await callback.answer("Генерирую QR…")
-    qr_bytes = generate_qr(proxy.tg_link)
+    qr_bytes = generate_qr(proxy.tme_link)
     photo = BufferedInputFile(qr_bytes, filename="proxy_qr.png")
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
