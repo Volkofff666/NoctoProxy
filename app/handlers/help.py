@@ -16,7 +16,6 @@ LOGGER = logging.getLogger(__name__)
 async def cmd_help(
     message: Message,
     support_username: str,
-    tribute_url: str | None,
     channel_url: str | None,
 ) -> None:
     text = (
@@ -24,10 +23,9 @@ async def cmd_help(
         "Это бесплатный Proxy для Telegram.\n"
         "Работает только в Telegram, это <b>не VPN</b>.\n\n"
         "<b>Команды:</b>\n"
-        "/proxy - показать все прокси\n"
-        "/share - поделиться ссылкой\n"
-        "/invite - ссылка, чтобы поделиться ботом\n"
-        "/donate - поддержать проект\n\n"
+        "/proxy — показать все прокси\n"
+        "/share — поделиться ссылкой\n"
+        "/invite — ссылка, чтобы поделиться ботом\n\n"
         f"<b>Поддержка:</b> https://t.me/{support_username}"
     )
     rows: list[list[InlineKeyboardButton]] = [
@@ -36,8 +34,6 @@ async def cmd_help(
     ]
     if channel_url:
         rows.append([InlineKeyboardButton(text="📣 Подписаться на канал", url=channel_url)])
-    if tribute_url:
-        rows.append([InlineKeyboardButton(text="❤️ Донат", url=tribute_url)])
     keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
     await message.answer(text, reply_markup=keyboard)
 

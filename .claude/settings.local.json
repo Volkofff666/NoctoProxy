@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Nocto\\\\Desktop\\\\work\\\\NoctoProxy\" -Force)",
+      "Bash(Select-Object Name, PSIsContainer)",
+      "Bash(Remove-Item *)"
+    ]
+  }
+}

@@ -2,3 +2,4 @@
 aiosqlite
 python-dotenv
 redis
+qrcode[pil]

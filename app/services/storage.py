@@ -166,15 +166,23 @@ class Storage:
             row = await cursor.fetchone()
             return int(row[0] if row else 0)
 
-    async def count_active_users_last_hours(self, hours: int = 24) -> int:
+    async def count_active_users(self) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT COUNT(*) FROM users WHERE is_blocked = 0")
+            row = await cursor.fetchone()
+            return int(row[0] if row else 0)
+
+    async def count_blocked_users(self) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT COUNT(*) FROM users WHERE is_blocked = 1")
+            row = await cursor.fetchone()
+            return int(row[0] if row else 0)
+
+    async def count_new_users_since(self, cutoff: str) -> int:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                """
-                SELECT COUNT(*)
-                FROM users
-                WHERE last_seen >= datetime('now', ?)
-                """,
-                (f"-{int(hours)} hours",),
+                "SELECT COUNT(*) FROM users WHERE first_seen >= ?",
+                (cutoff,),
             )
             row = await cursor.fetchone()
             return int(row[0] if row else 0)

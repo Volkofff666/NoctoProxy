@@ -8,9 +8,10 @@ from aiogram import Bot, F, Router
 from aiogram.enums import ButtonStyle, ChatMemberStatus
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.services.proxy_links import ProxyItem, ProxyStore
+from app.services.qr import generate_qr
 from app.services.storage import Storage
 
 router = Router()
@@ -63,7 +64,7 @@ def build_start_keyboard(
 def build_subscribe_gate_keyboard(channel_url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📣 Подписаться на канал", url=channel_url)],
+            [InlineKeyboardButton(text="📣 Подписаться на канал", url=channel_url, style=ButtonStyle.SUCCESS)],
             [InlineKeyboardButton(text="✅ Я подписался", callback_data="user:check_sub")],
         ]
     )
@@ -81,7 +82,7 @@ def build_instruction_keyboard() -> InlineKeyboardMarkup:
 def build_vpn_info_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Попробовать бесплатно — 3 дня", url=VPN_BOT_URL)],
+            [InlineKeyboardButton(text="🚀 Попробовать бесплатно — 3 дня", url=VPN_BOT_URL, style=ButtonStyle.PRIMARY)],
             [InlineKeyboardButton(text="🎁 Получить 3 дня бесплатно", callback_data="user:vpn_promo")],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="user:home")],
         ]
@@ -90,9 +91,12 @@ def build_vpn_info_keyboard() -> InlineKeyboardMarkup:
 
 def build_proxy_list_keyboard(proxies: list[ProxyItem]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    for proxy in proxies:
-        rows.append([InlineKeyboardButton(text=f"✅ Подключить {proxy.name}", url=proxy.tme_link)])
-    rows.append([InlineKeyboardButton(text="🚀 NoctoVPN — открывает Instagram и YouTube", url=VPN_BOT_URL)])
+    for idx, proxy in enumerate(proxies):
+        rows.append([
+            InlineKeyboardButton(text=f"⚡ {proxy.name}", url=proxy.tme_link, style=ButtonStyle.SUCCESS),
+            InlineKeyboardButton(text="📷 QR", callback_data=f"user:qr:{idx}"),
+        ])
+    rows.append([InlineKeyboardButton(text="🚀 NoctoVPN — открывает Instagram и YouTube", url=VPN_BOT_URL, style=ButtonStyle.PRIMARY)])
     rows.append([
         InlineKeyboardButton(text="📖 Инструкция", callback_data="user:instruction"),
         InlineKeyboardButton(text="⬅️ Назад", callback_data="user:home"),
@@ -131,7 +135,8 @@ def build_share_actions_keyboard(tme_link: str) -> InlineKeyboardMarkup:
     )
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📨 Отправить другу", url=share_url)],
+            [InlineKeyboardButton(text="📨 Отправить ссылку другу", url=share_url)],
+            [InlineKeyboardButton(text="📷 Показать QR-код", callback_data="user:qr:0")],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="user:home")],
         ]
     )
@@ -209,7 +214,7 @@ async def _send_vpn_promo(
     g = _greet(first_name)
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Попробовать VPN — 3 дня бесплатно", url=VPN_BOT_URL)],
+            [InlineKeyboardButton(text="🚀 Попробовать VPN — 3 дня бесплатно", url=VPN_BOT_URL, style=ButtonStyle.PRIMARY)],
         ]
     )
     try:
@@ -240,7 +245,7 @@ async def _send_vpn_promo_final(
     g = _greet(first_name)
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Попробовать NoctoVPN бесплатно", url=VPN_BOT_URL)],
+            [InlineKeyboardButton(text="🚀 Попробовать NoctoVPN бесплатно", url=VPN_BOT_URL, style=ButtonStyle.PRIMARY)],
         ]
     )
     try:
@@ -273,7 +278,7 @@ async def _send_vpn_promo_dojim(
     g = _greet(first_name)
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🔥 Забрать 3 дня бесплатно", url=VPN_BOT_URL)],
+            [InlineKeyboardButton(text="🔥 Забрать 3 дня бесплатно", url=VPN_BOT_URL, style=ButtonStyle.PRIMARY)],
         ]
     )
     try:
@@ -490,7 +495,7 @@ async def cmd_start(
                 "там первыми узнаете если сервер упадёт или появятся новые прокси.\n\n"
                 "Так не придётся гадать почему прокси вдруг перестал работать.",
                 reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=[[InlineKeyboardButton(text="📣 Подписаться", url=channel_url)]]
+                    inline_keyboard=[[InlineKeyboardButton(text="📣 Подписаться", url=channel_url, style=ButtonStyle.SUCCESS)]]
                 ),
                 disable_web_page_preview=True,
             )
@@ -832,9 +837,12 @@ async def cb_user_share(
     proxy = proxies[0]
     await storage.record_share(user.id, source="cb_share")
     tme_link = proxy.tme_link
+    me = await callback.bot.get_me()
     text = (
         "📤 <b>Поделитесь прокси с друзьями</b>\n\n"
         "Друг получит ссылку и подключится за одно нажатие — без регистрации и настроек.\n\n"
+        f"💡 <b>Inline:</b> напишите <code>@{me.username}</code> в любом чате — "
+        "бот вставит карточку с кнопкой подключения прямо в переписку.\n\n"
         "<i>Нужен VPN для всех сайтов? → @noctovpn_bot</i>"
     )
     await _safe_edit(
@@ -844,6 +852,50 @@ async def cb_user_share(
         disable_web_page_preview=True,
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("user:qr:"))
+async def cb_user_qr(
+    callback: CallbackQuery,
+    proxy_store: ProxyStore,
+    storage: Storage,
+) -> None:
+    user = callback.from_user
+    await storage.touch_user(
+        tg_id=user.id,
+        username=user.username,
+        full_name=user.full_name,
+    )
+
+    parts = callback.data.split(":")
+    idx = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+    proxies = proxy_store.load_enabled()
+
+    if not proxies:
+        await callback.answer("Прокси недоступен", show_alert=True)
+        return
+
+    idx = min(idx, len(proxies) - 1)
+    proxy = proxies[idx]
+
+    await callback.answer("Генерирую QR…")
+    qr_bytes = generate_qr(proxy.tg_link)
+    photo = BufferedInputFile(qr_bytes, filename="proxy_qr.png")
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⚡ Подключить прокси", url=proxy.tme_link, style=ButtonStyle.SUCCESS)],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="user:proxies")],
+        ]
+    )
+    await callback.message.answer_photo(
+        photo,
+        caption=(
+            f"📷 <b>QR-код для {proxy.name}</b>\n\n"
+            "Покажите другу — он сканирует камерой и Telegram сам добавит прокси.\n\n"
+            "<i>Или нажмите «Подключить прокси» ниже.</i>"
+        ),
+        reply_markup=keyboard,
+    )
 
 
 async def _get_referral_text_and_keyboard(
@@ -929,11 +981,11 @@ async def cb_proxy_ok(
         f"&text={quote(share_text, safe='')}"
     )
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="🚀 Попробовать NoctoVPN бесплатно", url=VPN_BOT_URL)],
+        [InlineKeyboardButton(text="🚀 Попробовать NoctoVPN бесплатно", url=VPN_BOT_URL, style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="📤 Поделиться прокси с другом", url=share_url)],
     ]
     if channel_url:
-        rows.append([InlineKeyboardButton(text="📣 Подписаться на наш канал", url=channel_url)])
+        rows.append([InlineKeyboardButton(text="📣 Подписаться на наш канал", url=channel_url, style=ButtonStyle.SUCCESS)])
     keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
 
     g = _greet(user.first_name or "")

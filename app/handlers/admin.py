@@ -4,11 +4,11 @@ import asyncio
 import html
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, quote
 
 from aiogram import Bot, F, Router
-from aiogram.enums import ChatMemberStatus
+from aiogram.enums import ButtonStyle, ChatMemberStatus
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
@@ -42,10 +42,6 @@ class UserSearchForm(StatesGroup):
 
 
 class UserWriteForm(StatesGroup):
-    text = State()
-
-
-class ChannelInviteForm(StatesGroup):
     text = State()
 
 
@@ -98,6 +94,16 @@ def _growth_percent(current: int, previous: int) -> str:
     return f"{sign}{delta:.1f}%"
 
 
+def _calendar_cutoffs() -> tuple[str, str, str]:
+    """Return (today_start, week_start, month_start) as UTC strings for SQLite."""
+    now = datetime.now(timezone.utc)
+    fmt = "%Y-%m-%d %H:%M:%S"
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week = today - timedelta(days=today.weekday())   # Monday 00:00
+    month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return today.strftime(fmt), week.strftime(fmt), month.strftime(fmt)
+
+
 def _is_subscribed_status(status: str) -> bool:
     return status in {
         ChatMemberStatus.MEMBER,
@@ -106,31 +112,11 @@ def _is_subscribed_status(status: str) -> bool:
     }
 
 
-def build_channel_invite_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Запустить рассылку", callback_data="admin:channel_invite_run")],
-            [InlineKeyboardButton(text="✏️ Изменить текст", callback_data="admin:channel_invite_edit")],
-            [InlineKeyboardButton(text="📊 Статистика кампании", callback_data="admin:channel_invite_stats")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:menu")],
-        ]
-    )
-
-
 def _cut_text(text: str, limit: int = 500) -> str:
     value = (text or "").strip()
     if len(value) <= limit:
         return value
     return value[:limit].rstrip() + "..."
-
-
-def build_channel_invite_screen_text(text: str) -> str:
-    return (
-        "<b>Кампания приглашения в канал</b>\n\n"
-        "Рассылка отправляется только тем пользователям, которые не подписаны на канал.\n\n"
-        "<b>Текущий текст:</b>\n"
-        f"{_cut_text(text)}"
-    )
 
 
 def build_admin_menu() -> InlineKeyboardMarkup:
@@ -161,15 +147,17 @@ def build_test_cta_keyboard() -> InlineKeyboardMarkup:
 
 def build_admin_dashboard_text(
     total_users: int,
-    new_users: int,
+    active_users: int,
+    blocked_users: int,
     total_proxies: int,
     enabled_proxies: int,
 ) -> str:
     return (
         "<b>Панель администратора</b>\n\n"
-        "<b>Пользователи</b>\n"
+        "📊 <b>Пользователи</b>\n"
         f"• Всего: <b>{total_users}</b>\n"
-        f"• Новые за 24ч: <b>{new_users}</b>\n"
+        f"• Активных: <b>{active_users}</b>\n"
+        f"• Заблокированных: <b>{blocked_users}</b>\n"
         "\n"
         "<b>Прокси</b>\n"
         f"• Всего: <b>{total_proxies}</b>\n"
@@ -513,36 +501,6 @@ async def _execute_broadcast(
         pass
 
 
-async def _send_channel_invite_message(
-    bot: Bot,
-    tg_id: int,
-    text: str,
-    channel_url: str,
-) -> bool:
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Подписаться на канал", url=channel_url)],
-        ]
-    )
-    for _ in range(2):
-        try:
-            await bot.send_message(
-                chat_id=tg_id,
-                text=text,
-                reply_markup=keyboard,
-                disable_web_page_preview=True,
-            )
-            return True
-        except TelegramRetryAfter as exc:
-            await asyncio.sleep(float(exc.retry_after) + 0.5)
-        except (TelegramForbiddenError, TelegramBadRequest):
-            return False
-        except Exception:
-            LOGGER.exception("Unexpected channel invite error for tg_id=%s", tg_id)
-            return False
-    return False
-
-
 def _plain_text(value: str) -> str:
     return html.unescape(re.sub(r"<[^>]+>", "", value or "")).strip()
 
@@ -630,12 +588,14 @@ async def cmd_admin(
 
     await state.clear()
     total_users = await storage.count_users()
-    new_users = await storage.count_new_users_last_hours(24)
+    active_users = await storage.count_active_users()
+    blocked_users = await storage.count_blocked_users()
     proxies = proxy_store.load_all()
     enabled_proxies = len([proxy for proxy in proxies if proxy.enabled])
     text = build_admin_dashboard_text(
         total_users=total_users,
-        new_users=new_users,
+        active_users=active_users,
+        blocked_users=blocked_users,
         total_proxies=len(proxies),
         enabled_proxies=enabled_proxies,
     )
@@ -651,7 +611,6 @@ async def cb_admin_actions(
     state: FSMContext,
     channel_url: str | None,
     channel_id: str | None,
-    channel_campaign_workers: int,
     broadcast_workers: int,
     vpn_promo_code: str,
     vpn_promo_bonus_days: int,
@@ -665,12 +624,14 @@ async def cb_admin_actions(
     if action[1] == "menu":
         await state.clear()
         total_users = await storage.count_users()
-        new_users = await storage.count_new_users_last_hours(24)
+        active_users = await storage.count_active_users()
+        blocked_users = await storage.count_blocked_users()
         proxies = proxy_store.load_all()
         enabled_proxies = len([proxy for proxy in proxies if proxy.enabled])
         text = build_admin_dashboard_text(
             total_users=total_users,
-            new_users=new_users,
+            active_users=active_users,
+            blocked_users=blocked_users,
             total_proxies=len(proxies),
             enabled_proxies=enabled_proxies,
         )
@@ -942,194 +903,30 @@ async def cb_admin_actions(
         await callback.answer()
         return
 
-    if action[1] == "channel_invite":
-        await state.clear()
-        template_text = await storage.get_channel_invite_text()
-        await callback.message.edit_text(
-            build_channel_invite_screen_text(template_text),
-            reply_markup=build_channel_invite_menu(),
-            disable_web_page_preview=True,
-        )
-        await callback.answer()
-        return
-
-    if action[1] == "channel_invite_edit":
-        await state.clear()
-        await state.set_state(ChannelInviteForm.text)
-        await _save_panel_ref(state, callback)
-        current_text = await storage.get_channel_invite_text()
-        await callback.message.edit_text(
-            (
-                "<b>Изменение текста приглашения</b>\n\n"
-                "Отправьте новый текст одним сообщением.\n\n"
-                "<b>Текущий текст:</b>\n"
-                f"{_cut_text(current_text, 350)}"
-            ),
-            reply_markup=build_wizard_keyboard("admin:channel_invite"),
-            disable_web_page_preview=True,
-        )
-        await callback.answer()
-        return
-
-    if action[1] == "channel_invite_stats":
-        await state.clear()
-        stats = await storage.get_channel_invite_stats()
-        if stats["runs_count"] == 0:
-            text = (
-                "<b>Статистика кампании</b>\n\n"
-                "Запусков еще не было."
-            )
-        else:
-            text = (
-                "<b>Статистика кампании</b>\n\n"
-                f"• Запусков: <b>{stats['runs_count']}</b>\n"
-                f"• Всего отправлено: <b>{stats['sent_ok_total']}</b>\n"
-                f"• Всего ошибок: <b>{stats['sent_failed_total']}</b>\n\n"
-                "<b>Последний запуск:</b>\n"
-                f"• Дата: <b>{stats['last_created_at']}</b>\n"
-                f"• Пользователей в базе: <b>{stats['last_total_users']}</b>\n"
-                f"• Уже подписаны: <b>{stats['last_subscribed_users']}</b>\n"
-                f"• Целевые (без подписки): <b>{stats['last_target_users']}</b>\n"
-                f"• Доставлено: <b>{stats['last_sent_ok']}</b>\n"
-                f"• Ошибок: <b>{stats['last_sent_failed']}</b>"
-            )
-        await callback.message.edit_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:channel_invite")]]
-            ),
-        )
-        await callback.answer()
-        return
-
-    if action[1] == "channel_invite_run":
-        await state.clear()
-        if not channel_url or not channel_id:
-            await callback.answer("Нужно задать CHANNEL_URL и CHANNEL_ID в .env", show_alert=True)
-            return
-
-        await callback.message.edit_text(
-            "Кампания в процессе...\nПроверяю подписку и отправляю приглашения.",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:channel_invite")]]
-            ),
-        )
-        await callback.answer()
-
-        user_ids = await storage.get_all_user_ids()
-        total_users = len(user_ids)
-        subscribed_users = 0
-        target_users = 0
-        sent_ok = 0
-        sent_failed = 0
-        template_text = await storage.get_channel_invite_text()
-        workers = max(1, int(channel_campaign_workers))
-
-        queue: asyncio.Queue[int | None] = asyncio.Queue()
-        for tg_id in user_ids:
-            queue.put_nowait(int(tg_id))
-        for _ in range(workers):
-            queue.put_nowait(None)
-
-        lock = asyncio.Lock()
-
-        async def worker() -> None:
-            nonlocal subscribed_users, target_users, sent_ok, sent_failed
-            while True:
-                tg_id = await queue.get()
-                if tg_id is None:
-                    return
-
-                is_subscribed = False
-                try:
-                    member = await callback.bot.get_chat_member(chat_id=channel_id, user_id=tg_id)
-                    is_subscribed = _is_subscribed_status(member.status)
-                except TelegramRetryAfter as exc:
-                    await asyncio.sleep(float(exc.retry_after) + 0.5)
-                    try:
-                        member = await callback.bot.get_chat_member(chat_id=channel_id, user_id=tg_id)
-                        is_subscribed = _is_subscribed_status(member.status)
-                    except Exception:
-                        is_subscribed = False
-                except TelegramBadRequest:
-                    is_subscribed = False
-                except Exception:
-                    LOGGER.exception("Failed to check chat member for tg_id=%s", tg_id)
-                    is_subscribed = False
-
-                if is_subscribed:
-                    async with lock:
-                        subscribed_users += 1
-                    continue
-
-                async with lock:
-                    target_users += 1
-
-                ok = await _send_channel_invite_message(
-                    callback.bot,
-                    tg_id,
-                    template_text,
-                    channel_url,
-                )
-                async with lock:
-                    if ok:
-                        sent_ok += 1
-                    else:
-                        sent_failed += 1
-
-        await asyncio.gather(*(worker() for _ in range(workers)))
-
-        await storage.add_channel_invite_run(
-            total_users=total_users,
-            subscribed_users=subscribed_users,
-            target_users=target_users,
-            sent_ok=sent_ok,
-            sent_failed=sent_failed,
-            template_text=template_text,
-        )
-
-        await callback.message.edit_text(
-            (
-                "<b>Кампания завершена</b>\n\n"
-                f"• Пользователей в базе: <b>{total_users}</b>\n"
-                f"• Уже подписаны: <b>{subscribed_users}</b>\n"
-                f"• Без подписки: <b>{target_users}</b>\n"
-                f"• Доставлено: <b>{sent_ok}</b>\n"
-                f"• Ошибок: <b>{sent_failed}</b>"
-            ),
-            reply_markup=build_channel_invite_menu(),
-        )
-        return
-
     if action[1] == "stats":
         await state.clear()
+        today_cut, week_cut, month_cut = _calendar_cutoffs()
         total_users = await storage.count_users()
-        new_today = await storage.count_new_users_last_hours(24)
-        new_week = await storage.count_new_users_last_hours(24 * 7)
-        new_month = await storage.count_new_users_last_hours(24 * 30)
-
-        prev_today = max(0, await storage.count_new_users_last_hours(24 * 2) - new_today)
-        prev_week = max(0, await storage.count_new_users_last_hours(24 * 14) - new_week)
-        prev_month = max(0, await storage.count_new_users_last_hours(24 * 60) - new_month)
-
-        growth_today = _growth_percent(new_today, prev_today)
-        growth_week = _growth_percent(new_week, prev_week)
-        growth_month = _growth_percent(new_month, prev_month)
-
+        active_users = await storage.count_active_users()
+        blocked_users = await storage.count_blocked_users()
+        new_today = await storage.count_new_users_since(today_cut)
+        new_week = await storage.count_new_users_since(week_cut)
+        new_month = await storage.count_new_users_since(month_cut)
         proxies = proxy_store.load_all()
         enabled_proxies = len([proxy for proxy in proxies if proxy.enabled])
-
         text = (
-            "<b>Статистика бота</b>\n\n"
-            "<b>Пользователи</b>\n"
+            "👥 <b>Управление пользователями</b>\n\n"
+            "📊 <b>Статистика:</b>\n"
             f"• Всего: <b>{total_users}</b>\n"
+            f"• Активных: <b>{active_users}</b>\n"
+            f"• Заблокированных: <b>{blocked_users}</b>\n"
             "\n"
-            "<b>📈 Новые пользователи</b>\n"
-            f"• Сегодня: <b>{new_today}</b> ({growth_today})\n"
-            f"• За неделю: <b>{new_week}</b> ({growth_week})\n"
-            f"• За месяц: <b>{new_month}</b> ({growth_month})\n"
+            "📈 <b>Новые пользователи:</b>\n"
+            f"• Сегодня: <b>{new_today}</b>\n"
+            f"• За неделю: <b>{new_week}</b>\n"
+            f"• За месяц: <b>{new_month}</b>\n"
             "\n"
-            "<b>Прокси</b>\n"
+            "<b>Прокси:</b>\n"
             f"• Всего: <b>{len(proxies)}</b>\n"
             f"• Включено: <b>{enabled_proxies}</b>"
         )
@@ -1150,17 +947,24 @@ async def cb_admin_actions(
         if len(action) >= 3 and action[2].isdigit():
             page = max(1, int(action[2]))
 
+        today_cut, week_cut, month_cut = _calendar_cutoffs()
         total_users = await storage.count_users()
+        active_users = await storage.count_active_users()
+        blocked_users = await storage.count_blocked_users()
+        new_today = await storage.count_new_users_since(today_cut)
         total_pages = max(1, (total_users + USERS_PAGE_SIZE - 1) // USERS_PAGE_SIZE)
         if page > total_pages:
             page = total_pages
 
         users = await storage.get_users_page(page=page, page_size=USERS_PAGE_SIZE)
         text = (
-            f"👥 Список пользователей (стр. {page}/{total_pages})\n\n"
-            f"Всего: {total_users}\n"
-            "Иконки: ✅/⛔ статус\n"
-            "Нажмите на пользователя для управления:"
+            "👥 <b>Управление пользователями</b>\n\n"
+            "📊 <b>Статистика:</b>\n"
+            f"• Всего: <b>{total_users}</b>\n"
+            f"• Активных: <b>{active_users}</b>\n"
+            f"• Заблокированных: <b>{blocked_users}</b>\n"
+            f"• Новых сегодня: <b>{new_today}</b>\n\n"
+            f"Стр. {page}/{total_pages} — нажмите на пользователя:"
         )
         keyboard = build_users_keyboard(users=users, page=page, total_pages=total_pages)
         await callback.message.edit_text(text, reply_markup=keyboard)
@@ -1304,16 +1108,23 @@ async def cb_admin_actions(
             await callback.answer("Удалено")
             return
 
+        today_cut, _, _ = _calendar_cutoffs()
         total_users = await storage.count_users()
+        active_users = await storage.count_active_users()
+        blocked_users = await storage.count_blocked_users()
+        new_today = await storage.count_new_users_since(today_cut)
         total_pages = max(1, (total_users + USERS_PAGE_SIZE - 1) // USERS_PAGE_SIZE)
         if page > total_pages:
             page = total_pages
         users = await storage.get_users_page(page=page, page_size=USERS_PAGE_SIZE)
         text = (
-            f"👥 Список пользователей (стр. {page}/{total_pages})\n\n"
-            f"Всего: {total_users}\n"
-            "Иконки: ✅/⛔ статус\n"
-            "Нажмите на пользователя для управления:"
+            "👥 <b>Управление пользователями</b>\n\n"
+            "📊 <b>Статистика:</b>\n"
+            f"• Всего: <b>{total_users}</b>\n"
+            f"• Активных: <b>{active_users}</b>\n"
+            f"• Заблокированных: <b>{blocked_users}</b>\n"
+            f"• Новых сегодня: <b>{new_today}</b>\n\n"
+            f"Стр. {page}/{total_pages} — нажмите на пользователя:"
         )
         keyboard = build_users_keyboard(users=users, page=page, total_pages=total_pages)
         await callback.message.edit_text(text, reply_markup=keyboard)
@@ -1338,7 +1149,7 @@ async def cb_admin_actions(
 
         if cta_type == "vpn1":
             kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="🚀 Попробовать VPN — 3 дня бесплатно", url=VPN_BOT_URL),
+                InlineKeyboardButton(text="🚀 Попробовать VPN — 3 дня бесплатно", url=VPN_BOT_URL, style=ButtonStyle.PRIMARY),
             ]])
             await bot.send_message(
                 admin_id,
@@ -1354,7 +1165,7 @@ async def cb_admin_actions(
 
         elif cta_type == "vpn2":
             kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="🚀 Попробовать NoctoVPN бесплатно", url=VPN_BOT_URL),
+                InlineKeyboardButton(text="🚀 Попробовать NoctoVPN бесплатно", url=VPN_BOT_URL, style=ButtonStyle.PRIMARY),
             ]])
             await bot.send_message(
                 admin_id,
@@ -1372,7 +1183,7 @@ async def cb_admin_actions(
 
         elif cta_type == "vpn3":
             kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="🔥 Забрать 3 дня бесплатно", url=VPN_BOT_URL),
+                InlineKeyboardButton(text="🔥 Забрать 3 дня бесплатно", url=VPN_BOT_URL, style=ButtonStyle.PRIMARY),
             ]])
             await bot.send_message(
                 admin_id,
@@ -1391,7 +1202,7 @@ async def cb_admin_actions(
                 await callback.answer("CHANNEL_URL не задан в .env", show_alert=True)
                 return
             kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="📣 Подписаться на канал", url=channel_url),
+                InlineKeyboardButton(text="📣 Подписаться на канал", url=channel_url, style=ButtonStyle.SUCCESS),
             ]])
             await bot.send_message(
                 admin_id,
@@ -1553,38 +1364,6 @@ async def user_write_message(
         state,
         profile_text,
         build_user_profile_keyboard(target_tg_id, page, source),
-    )
-    await state.clear()
-
-
-@router.message(ChannelInviteForm.text)
-async def channel_invite_update_text(
-    message: Message,
-    state: FSMContext,
-    admin_ids: set[int],
-    storage: Storage,
-    bot: Bot,
-) -> None:
-    if not _is_admin(message.from_user.id, admin_ids):
-        return
-
-    new_text = (message.html_text or message.text or "").strip()
-    await _safe_delete_message(message)
-    if not new_text:
-        await _edit_panel(
-            bot,
-            state,
-            "<b>Текст не может быть пустым.</b>\n\nОтправьте новый текст приглашения.",
-            build_wizard_keyboard("admin:channel_invite"),
-        )
-        return
-
-    await storage.set_channel_invite_text(new_text)
-    await _edit_panel(
-        bot,
-        state,
-        build_channel_invite_screen_text(new_text),
-        build_channel_invite_menu(),
     )
     await state.clear()
 

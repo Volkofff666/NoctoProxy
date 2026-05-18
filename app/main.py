@@ -16,9 +16,9 @@ from redis.exceptions import RedisError
 
 from app.handlers import (
     admin_router,
-    donate_router,
     fallback_router,
     help_router,
+    inline_router,
     proxy_router,
     start_router,
 )
@@ -55,10 +55,7 @@ async def main() -> None:
     vpn_onboarding_final_delay_sec = int(os.getenv("ONBOARDING_VPN_FINAL_DELAY_SEC", "172800"))
     vpn_onboarding_dojim_delay_sec = int(os.getenv("ONBOARDING_VPN_DOJIM_DELAY_SEC", "432000"))
     connection_check_delay_sec = int(os.getenv("CONNECTION_CHECK_DELAY_SEC", "480"))
-    channel_campaign_workers = int(os.getenv("CHANNEL_CAMPAIGN_WORKERS", "10"))
     broadcast_workers = int(os.getenv("BROADCAST_WORKERS", "20"))
-    tribute_url_raw = os.getenv("TRIBUTE_URL", "").strip()
-    tribute_url = tribute_url_raw if tribute_url_raw else None
     db_path = os.getenv("DB_PATH", "bot.db")
     proxies_path = os.getenv("PROXIES_PATH", "config/proxies.json")
     admin_ids = parse_admin_ids(os.getenv("ADMIN_IDS"))
@@ -102,9 +99,9 @@ async def main() -> None:
     dp.include_router(start_router)
     dp.include_router(proxy_router)
     dp.include_router(help_router)
-    dp.include_router(donate_router)
     dp.include_router(admin_router)
     dp.include_router(fallback_router)
+    dp.include_router(inline_router)
 
     dp.workflow_data.update(
         {
@@ -121,9 +118,7 @@ async def main() -> None:
             "vpn_onboarding_final_delay_sec": vpn_onboarding_final_delay_sec,
             "vpn_onboarding_dojim_delay_sec": vpn_onboarding_dojim_delay_sec,
             "connection_check_delay_sec": connection_check_delay_sec,
-            "channel_campaign_workers": channel_campaign_workers,
             "broadcast_workers": broadcast_workers,
-            "tribute_url": tribute_url,
             "admin_ids": admin_ids,
         }
     )
