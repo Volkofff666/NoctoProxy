@@ -396,13 +396,6 @@ async def cmd_start(
     channel_url: str | None,
     channel_id: str | None,
     admin_ids: set[int],
-    channel_reminder_delay_sec: int,
-    vpn_onboarding_delay_sec: int,
-    vpn_onboarding_final_delay_sec: int,
-    vpn_onboarding_dojim_delay_sec: int,
-    connection_check_delay_sec: int,
-    vpn_promo_code: str,
-    vpn_promo_bonus_days: int,
 ) -> None:
     user = message.from_user
     first_name = user.first_name or ""
@@ -450,35 +443,6 @@ async def cmd_start(
                 _subscribe_gate_text(),
                 reply_markup=build_subscribe_gate_keyboard(channel_url or ""),
             )
-            # Start VPN onboarding for new users even when gated
-            if is_new_user:
-                if vpn_onboarding_delay_sec > 0:
-                    asyncio.create_task(
-                        _send_vpn_promo(
-                            message.bot, user.id,
-                            vpn_promo_code, vpn_promo_bonus_days,
-                            vpn_onboarding_delay_sec,
-                            first_name=first_name,
-                        )
-                    )
-                if vpn_onboarding_final_delay_sec > 0:
-                    asyncio.create_task(
-                        _send_vpn_promo_final(
-                            message.bot, user.id,
-                            vpn_promo_code, vpn_promo_bonus_days,
-                            vpn_onboarding_final_delay_sec,
-                            first_name=first_name,
-                        )
-                    )
-                if vpn_onboarding_dojim_delay_sec > 0:
-                    asyncio.create_task(
-                        _send_vpn_promo_dojim(
-                            message.bot, user.id,
-                            vpn_promo_code, vpn_promo_bonus_days,
-                            vpn_onboarding_dojim_delay_sec,
-                            first_name=first_name,
-                        )
-                    )
             return
 
     # Show main menu
@@ -491,63 +455,6 @@ async def cmd_start(
     )
     await message.answer(_main_menu_text(), reply_markup=keyboard)
 
-    # Onboarding for new users
-    if is_new_user:
-        # Connection check — fires after a short delay to ask if proxy worked
-        if connection_check_delay_sec > 0:
-            asyncio.create_task(
-                _send_connection_check(
-                    message.bot, user.id, first_name, connection_check_delay_sec,
-                )
-            )
-
-        # Channel promotion — only without gate (with gate they already subscribed)
-        if channel_url and not channel_id:
-            await message.answer(
-                "💡 <b>Полезный совет:</b> подпишитесь на наш канал — "
-                "там первыми узнаете если сервер упадёт или появятся новые прокси.\n\n"
-                "Так не придётся гадать почему прокси вдруг перестал работать.",
-                reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=[[InlineKeyboardButton(text="📣 Подписаться", url=channel_url, style=ButtonStyle.SUCCESS)]]
-                ),
-                disable_web_page_preview=True,
-            )
-            if channel_reminder_delay_sec > 0:
-                asyncio.create_task(
-                    _send_channel_reminder(
-                        message.bot, user.id, channel_url, channel_reminder_delay_sec,
-                        first_name=first_name,
-                    )
-                )
-
-        # VPN onboarding chain
-        if vpn_onboarding_delay_sec > 0:
-            asyncio.create_task(
-                _send_vpn_promo(
-                    message.bot, user.id,
-                    vpn_promo_code, vpn_promo_bonus_days,
-                    vpn_onboarding_delay_sec,
-                    first_name=first_name,
-                )
-            )
-        if vpn_onboarding_final_delay_sec > 0:
-            asyncio.create_task(
-                _send_vpn_promo_final(
-                    message.bot, user.id,
-                    vpn_promo_code, vpn_promo_bonus_days,
-                    vpn_onboarding_final_delay_sec,
-                    first_name=first_name,
-                )
-            )
-        if vpn_onboarding_dojim_delay_sec > 0:
-            asyncio.create_task(
-                _send_vpn_promo_dojim(
-                    message.bot, user.id,
-                    vpn_promo_code, vpn_promo_bonus_days,
-                    vpn_onboarding_dojim_delay_sec,
-                    first_name=first_name,
-                )
-            )
 
 
 @router.message(Command("invite"))

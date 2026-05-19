@@ -3,7 +3,10 @@
     "allow": [
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Nocto\\\\Desktop\\\\work\\\\NoctoProxy\" -Force)",
       "Bash(Select-Object Name, PSIsContainer)",
-      "Bash(Remove-Item *)"
+      "Bash(Remove-Item *)",
+      "Bash(Get-Content -Path \"C:\\\\Users\\\\Nocto\\\\Desktop\\\\work\\\\NoctoProxy\\\\.claude\\\\settings.local.json\")",
+      "Bash(ConvertFrom-Json)",
+      "Bash(ConvertTo-Json)"
     ]
   }
 }
